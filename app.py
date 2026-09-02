@@ -113,7 +113,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown(
         "<div style='text-align: center; color: #888888; font-size: 0.85em;'>"
-        "✨ Tasarım & Geliştirme<br><b>Yoldaş Işık</b> tarafından işlendi 🌙"
+        "✨ Tasarım & Geliştirme<br><b>Yoldaş Işık</b>  🌙"
         "</div>", 
         unsafe_allow_html=True
     )
