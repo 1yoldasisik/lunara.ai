@@ -13,6 +13,23 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Form elemanlarını kesin olarak yan yana ve hizada tutmak için CSS enjeksiyonu
+st.markdown("""
+<style>
+    /* Form içindeki kolonları zorunlu olarak yan yana ve dikeyde ortalı tut */
+    [data-testid="stForm"] [data-testid="stHorizontalBlock"] {
+        display: flex !important;
+        align-items: center !important;
+        flex-direction: row !important;
+    }
+    [data-testid="stForm"] [data-testid="column"] {
+        width: auto !important;
+        flex: 1 1 0% !important;
+        min-width: 0px !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # ------------------------------------------------------------------------------
 # 2. GROQ API & MODEL YÖNETİMİ
 # ------------------------------------------------------------------------------
@@ -35,7 +52,7 @@ def get_groq_client():
 
 
 def generate_completion(messages, model_name=None):
-    """Groq API üzerinden yanıt üretir. Hesabınızda aktif olan modeli otomatik veya seçime göre belirler."""
+    """Groq API üzerinden yanıt üretir."""
     client = get_groq_client()
     if client is None:
         return "Groq API anahtarı eksik. Lütfen Streamlit Secrets veya GROQ_API_KEY ortam değişkenini ekleyin."
@@ -85,23 +102,6 @@ with st.sidebar:
     st.caption("Astroloji & Kehanet Rehberi")
 
     st.markdown("---")
-    st.subheader("⚙️ Mistik Sürüm (Model)")
-    
-    model_choice = st.selectbox(
-        "Yapay Zeka Beyni",
-        options=["Pro (Llama 3.3 70B)", "Flash (Llama 3.1 8B)", "Beta (Deneysel)"],
-        index=0,
-        help="Pro: Derin ve detaylı analizler | Flash: Ultra hızlı yanıtlar | Beta: En güncel deneysel model"
-    )
-
-    model_map = {
-        "Pro (Llama 3.3 70B)": "llama-3.3-70b-versatile",
-        "Flash (Llama 3.1 8B)": "llama-3.1-8b-instant",
-        "Beta (Deneysel)": "llama-3.2-90b-vision-preview"
-    }
-    selected_model = model_map[model_choice]
-
-    st.markdown("---")
     st.subheader("✨ Günün Mistik Enerjisi")
     st.info("🃏 **Günün Kartı: Güneş** — Neşe, başarı ve netlik dolu bir enerji seni sarıyor.")
 
@@ -109,6 +109,14 @@ with st.sidebar:
     if st.button("🗑️ Sohbet Geçmişini Temizle", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
+
+    st.markdown("---")
+    st.markdown(
+        "<div style='text-align: center; color: #888888; font-size: 0.85em;'>"
+        "✨ Tasarım & Geliştirme<br><b>Yoldaş Işık</b> tarafından işlendi 🌙"
+        "</div>", 
+        unsafe_allow_html=True
+    )
 
 # ------------------------------------------------------------------------------
 # 5. ANA GÖVDE VE SEKMELER
@@ -132,16 +140,16 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # ------------------------------------------------------------------------------
 with tab1:
     st.markdown("### ✨ Hızlı Mistik Sorular")
-    col1, col2, col3, col4 = st.columns(4)
+    col_h1, col_h2, col_h3, col_h4 = st.columns(4)
 
     prompt_to_send = None
-    if col1.button("✨ Günlük Fal Yorumu", use_container_width=True):
+    if col_h1.button("✨ Günlük Fal Yorumu", use_container_width=True):
         prompt_to_send = "Bugün için genel falımı ve yıldızların bana mesajını yorumlar mısın?"
-    if col2.button("❤️ Aşk & Uyum", use_container_width=True):
+    if col_h2.button("❤️ Aşk & Uyum", use_container_width=True):
         prompt_to_send = "Aşk hayatımla ilgili evrenin bana vermek istediği mesaj nedir?"
-    if col3.button("💼 Kariyer & Gelecek", use_container_width=True):
+    if col_h3.button("💼 Kariyer & Gelecek", use_container_width=True):
         prompt_to_send = "Kariyerim ve maddi geleceğim konusunda yıldızlar ne söylüyor?"
-    if col4.button("🪐 Günün Burç Enerjisi", use_container_width=True):
+    if col_h4.button("🪐 Günün Burç Enerjisi", use_container_width=True):
         prompt_to_send = "Bugünün gezegen konumları ve burç enerjileri hakkında bilgi verir misin?"
 
     st.warning("🤖 Hoş geldin. Ben Lunara. Yıldızların fısıltıları, kartların gizemi ve evrenin sırlarıyla sana rehberlik etmek için buradayım.")
@@ -149,24 +157,6 @@ with tab1:
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
-
-    user_input = st.chat_input("Fal, tarot veya burçlar hakkında bir şey sorun...")
-    final_prompt = user_input or prompt_to_send
-
-    if final_prompt:
-        prompt_messages = [{"role": "system", "content": st.session_state.system_prompt}]
-        prompt_messages.extend(st.session_state.messages)
-        prompt_messages.append({"role": "user", "content": final_prompt})
-
-        st.session_state.messages.append({"role": "user", "content": final_prompt})
-        with st.chat_message("user"):
-            st.write(final_prompt)
-
-        with st.chat_message("assistant"):
-            with st.spinner("Yıldızlar hizalanıyor..."):
-                response = generate_completion(prompt_messages, model_name=selected_model)
-                st.write(response)
-                st.session_state.messages.append({"role": "assistant", "content": response})
 
 # ------------------------------------------------------------------------------
 # SEKME 2: DOĞUM HARİTASI ANALİZİ
@@ -203,7 +193,7 @@ with tab2:
                 {"role": "system", "content": "Sen dünyanın en iyi, en akıcı ve edebi dili kullanan uzman bir astrolog ve mistik rehberisin. Kesinlikle kelime tekrarı yapmazsın."},
                 {"role": "user", "content": prompt}
             ]
-            result = generate_completion(temp_messages, model_name=selected_model)
+            result = generate_completion(temp_messages, model_name="llama-3.3-70b-versatile")
             st.markdown("---")
             st.markdown(result)
 
@@ -225,7 +215,7 @@ with tab3:
                 {"role": "system", "content": "Sen sezgileri güçlü profesyonel bir Tarot okuyucususun."},
                 {"role": "user", "content": prompt}
             ]
-            tarot_result = generate_completion(temp_messages, model_name=selected_model)
+            tarot_result = generate_completion(temp_messages, model_name="llama-3.3-70b-versatile")
             st.markdown("---")
             st.markdown(tarot_result)
 
@@ -248,8 +238,56 @@ with tab4:
                     {"role": "system", "content": "Sen sembol bilimi ve mistik rüya/fincan yorumlama konusunda uzman bir rehbersin."},
                     {"role": "user", "content": prompt}
                 ]
-                symbol_result = generate_completion(temp_messages, model_name=selected_model)
+                symbol_result = generate_completion(temp_messages, model_name="llama-3.3-70b-versatile")
                 st.markdown("---")
                 st.markdown(symbol_result)
         else:
             st.warning("Lütfen analiz edilecek bir metin yazın.")
+
+# ------------------------------------------------------------------------------
+# 6. SAYFANIN EN ALTINA SABİTLENMİŞ GLOBAL GİRİŞ ÇUBUĞU
+# ------------------------------------------------------------------------------
+st.markdown("---")
+with st.container():
+    with st.form(key="global_chat_bar_form", clear_on_submit=True):
+        b_col1, b_col2, b_col3 = st.columns([2.0, 7.0, 1.0])
+
+        with b_col1:
+            bar_model_choice = st.selectbox(
+                "Model",
+                options=["Pro (70B)", "Flash (8B)", "Beta"],
+                label_visibility="collapsed"
+            )
+            bar_model_map = {
+                "Pro (70B)": "llama-3.3-70b-versatile",
+                "Flash (8B)": "llama-3.1-8b-instant",
+                "Beta": "llama-3.2-90b-vision-preview"
+            }
+            current_active_model = bar_model_map[bar_model_choice]
+
+        with b_col2:
+            user_text = st.text_input("Mesaj", placeholder="Fal, tarot veya burçlar hakkında bir şey yazın...", label_visibility="collapsed")
+
+        with b_col3:
+            submitted = st.form_submit_button("➤", help="Gönder")
+
+final_prompt = user_text or (prompt_to_send if 'prompt_to_send' in locals() else None)
+
+if submitted and final_prompt:
+    message_payload = {"role": "user", "content": final_prompt}
+    st.session_state.messages.append(message_payload)
+
+    with st.chat_message("user"):
+        st.write(final_prompt)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Yıldızlar ve semboller okunuyor..."):
+            prompt_messages = [{"role": "system", "content": st.session_state.get("system_prompt", "Sen Lunara'sın.")}]
+            for m in st.session_state.messages[:-1]:
+                prompt_messages.append({"role": m["role"], "content": m["content"]})
+            prompt_messages.append({"role": "user", "content": final_prompt})
+
+            response = generate_completion(prompt_messages, model_name=current_active_model)
+            st.write(response)
+            st.session_state.messages.append({"role": "assistant", "content": response})
+    st.rerun()
