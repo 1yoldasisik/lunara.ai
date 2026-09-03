@@ -88,7 +88,7 @@ def generate_completion(messages, model_name=None):
         response = client.chat.completions.create(
             model=chosen_model,
             messages=messages,
-            temperature=0.7,
+            temperature=0.4,
             max_tokens=2048,
         )
         return response.choices[0].message.content
