@@ -3,9 +3,7 @@ import datetime
 import streamlit as st
 from groq import Groq
 
-# ------------------------------------------------------------------------------
-# 1. SAYFA VE TEMA YAPILANDIRMASI
-# ------------------------------------------------------------------------------
+# 1. Sayfa ve Tema Yapılandırması
 st.set_page_config(
     page_title="Lunara.ai | Mistik Rehber",
     page_icon="🌙",
@@ -13,10 +11,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Form elemanlarını kesin olarak yan yana ve hizada tutmak için CSS enjeksiyonu
+# Form öğelerinin yan yana ve hizada kalmasını sağlayan biçimlendirme
 st.markdown("""
 <style>
-    /* Form içindeki kolonları zorunlu olarak yan yana ve dikeyde ortalı tut */
     [data-testid="stForm"] [data-testid="stHorizontalBlock"] {
         display: flex !important;
         align-items: center !important;
@@ -30,11 +27,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ------------------------------------------------------------------------------
-# 2. GROQ API & MODEL YÖNETİMİ
-# ------------------------------------------------------------------------------
+# 2. Groq API ve Model Yönetimi
 def get_groq_api_key():
-    """Secrets veya Environment üzerinden API anahtarını güvenli şekilde okur."""
     try:
         key = st.secrets.get("GROQ_API_KEY")
     except Exception:
@@ -52,10 +46,9 @@ def get_groq_client():
 
 
 def generate_completion(messages, model_name=None):
-    """Groq API üzerinden yanıt üretir."""
     client = get_groq_client()
     if client is None:
-        return "Groq API anahtarı eksik. Lütfen Streamlit Secrets veya GROQ_API_KEY ortam değişkenini ekleyin."
+        return "Groq API anahtarı eksik. Lütfen yapılandırma dosyasını veya ortam değişkenini kontrol edin."
 
     try:
         models_response = client.models.list()
@@ -76,15 +69,13 @@ def generate_completion(messages, model_name=None):
             model=chosen_model,
             messages=messages,
             temperature=0.7,
-            max_tokens=1024,
+            max_tokens=2048,
         )
         return response.choices[0].message.content
     except Exception as e:
         return f"Bir hata oluştu: {str(e)}"
 
-# ------------------------------------------------------------------------------
-# 3. OTURUM HAFIZASI (SESSION STATE)
-# ------------------------------------------------------------------------------
+# 3. Oturum Belleği Yönetimi
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -94,9 +85,7 @@ if "system_prompt" not in st.session_state:
         "ve derin bilgiye sahip bir yapay zeka danışmanısın. Kullanıcılara Türkçe, nazik ve gizemli bir üslupla yanıt ver."
     )
 
-# ------------------------------------------------------------------------------
-# 4. SOL PANEL (SIDEBAR)
-# ------------------------------------------------------------------------------
+# 4. Yan Panel
 with st.sidebar:
     st.title("🌙 Lunara.ai")
     st.caption("Astroloji & Kehanet Rehberi")
@@ -113,14 +102,12 @@ with st.sidebar:
     st.markdown("---")
     st.markdown(
         "<div style='text-align: center; color: #888888; font-size: 0.85em;'>"
-        "✨ Tasarım & Geliştirme<br><b>Yoldaş Işık</b>  🌙"
+        "✨Tasarım & Geliştirme<br><b>Yoldaş Işık</b>🌙"
         "</div>", 
         unsafe_allow_html=True
     )
 
-# ------------------------------------------------------------------------------
-# 5. ANA GÖVDE VE SEKMELER
-# ------------------------------------------------------------------------------
+# 5. Ana Gövde ve Sekmeler
 st.title("🌙 Lunara.ai | Mistik Rehber")
 st.write("Kişiselleştirilmiş Yapay Zeka Fal, Tarot ve Astroloji Danışmanı")
 
@@ -135,9 +122,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "☕ Kahve Falı & Rüyalar"
 ])
 
-# ------------------------------------------------------------------------------
-# SEKME 1: MİSTİK SOHBET
-# ------------------------------------------------------------------------------
+# Sekme 1: Mistik Sohbet
 with tab1:
     st.markdown("### ✨ Hızlı Mistik Sorular")
     col_h1, col_h2, col_h3, col_h4 = st.columns(4)
@@ -158,9 +143,7 @@ with tab1:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
 
-# ------------------------------------------------------------------------------
-# SEKME 2: DOĞUM HARİTASI ANALİZİ
-# ------------------------------------------------------------------------------
+# Sekme 2: Doğum Haritası Analizi
 with tab2:
     st.subheader("📜 Doğum Haritası Potansiyel Analizi")
     with st.form("astro_form"):
@@ -197,9 +180,7 @@ with tab2:
             st.markdown("---")
             st.markdown(result)
 
-# ------------------------------------------------------------------------------
-# SEKME 3: 3 KART TAROT AÇILIMI
-# ------------------------------------------------------------------------------
+# Sekme 3: 3 Kart Tarot Açılımı
 with tab3:
     st.subheader("🃏 3 Kart Tarot Açılımı (Geçmiş - Şimdi - Gelecek)")
     niyet = st.text_input("Odaklanmak istediğiniz konu veya niyetiniz:", placeholder="Örn: Kariyerimdeki değişiklikler...")
@@ -219,9 +200,7 @@ with tab3:
             st.markdown("---")
             st.markdown(tarot_result)
 
-# ------------------------------------------------------------------------------
-# SEKME 4: KAHVE FALI & RÜYALAR
-# ------------------------------------------------------------------------------
+# Sekme 4: Kahve Falı ve Rüyalar
 with tab4:
     st.subheader("☕ Kahve Falı & Rüya Tabiri")
     metin = st.text_area("Fincanınızdaki sembolleri veya gördüğünüz rüyayı anlatın:", height=150)
@@ -244,13 +223,12 @@ with tab4:
         else:
             st.warning("Lütfen analiz edilecek bir metin yazın.")
 
-# ------------------------------------------------------------------------------
-# 6. SAYFANIN EN ALTINA SABİTLENMİŞ GLOBAL GİRİŞ ÇUBUĞU
-# ------------------------------------------------------------------------------
+# 6. Alt Kısma Sabitlenmiş Global Giriş Çubuğu
 st.markdown("---")
 with st.container():
     with st.form(key="global_chat_bar_form", clear_on_submit=True):
-        b_col1, b_col2, b_col3 = st.columns([2.0, 7.0, 1.0])
+        # Model seçimi daraltıldı, mesaj giriş alanı genişletildi
+        b_col1, b_col2, b_col3 = st.columns([1.2, 7.8, 1.0])
 
         with b_col1:
             bar_model_choice = st.selectbox(
