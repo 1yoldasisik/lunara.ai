@@ -116,8 +116,9 @@ if "logged_in_email" not in st.session_state:
 
 if "system_prompt" not in st.session_state:
     st.session_state.system_prompt = (
-        "Sen Lunara'sın. Yıldızların, kartların ve sembollerin rehberliğinde konuşan, empatik, mistik "
-        "ve derin bilgiye sahip bir yapay zeka danışmanısın. Kullanıcılara Türkçe, nazik ve gizemli bir üslupla yanıt ver."
+        "Sen Lunara'sın. Profesyonel, empatik ve mistik bir astroloji ve fal danışmanısın. "
+        "Kullanıcılara her zaman akıcı, gramer açısından kusursuz, anlamlı ve edebi bir Türkçe ile yanıt ver. "
+        "Asla anlamsız, kopuk, rüya benzeri veya saçma cümleler kurma; her zaman mantıklı bir bütünlük içinde konuş."
     )
 
 # Giriş, Üye Ol ve Profil Modalları (Dialogs)
