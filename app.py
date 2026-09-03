@@ -1,5 +1,7 @@
 import os
 import datetime
+import json
+import urllib.request
 import streamlit as st
 from groq import Groq
 
@@ -11,7 +13,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Sohbet çubuğunu Gemini gibi sabitleyen ve model seçimini sol tarafa hizalayan CSS
+# Sohbet çubuğunu sabitleyen ve genel görünümü düzenleyen CSS
 st.markdown("""
 <style>
     [data-testid="stForm"] [data-testid="stHorizontalBlock"] {
@@ -46,6 +48,26 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# Burç Hesaplama Yardımcı Fonksiyonu
+def get_zodiac_sign(date_val):
+    if not date_val:
+        return "Bilinmiyor"
+    day = date_val.day
+    month = date_val.month
+    
+    if (month == 3 and day >= 21) or (month == 4 and day <= 20): return "Koç ♈"
+    elif (month == 4 and day >= 21) or (month == 5 and day <= 20): return "Boğa ♉"
+    elif (month == 5 and day >= 21) or (month == 6 and day <= 21): return "İkizler ♊"
+    elif (month == 6 and day >= 22) or (month == 7 and day <= 22): return "Yengeç ♋"
+    elif (month == 7 and day >= 23) or (month == 8 and day <= 22): return "Aslan ♌"
+    elif (month == 8 and day >= 23) or (month == 9 and day <= 22): return "Başak ♍"
+    elif (month == 9 and day >= 23) or (month == 10 and day <= 22): return "Terazi ♎"
+    elif (month == 10 and day >= 23) or (month == 11 and day <= 21): return "Akrep ♏"
+    elif (month == 11 and day >= 22) or (month == 12 and day <= 21): return "Yay ♐"
+    elif (month == 12 and day >= 22) or (month == 1 and day <= 19): return "Oğlak ♑"
+    elif (month == 1 and day >= 20) or (month == 2 and day <= 18): return "Kova ♒"
+    else: return "Balık ♓"
 
 # Groq API ve Model Yönetimi
 def get_groq_api_key():
@@ -89,6 +111,7 @@ def generate_completion(messages, model_name=None):
             model=chosen_model,
             messages=messages,
             temperature=0.4,
+            top_p=0.9,
             max_tokens=2048,
         )
         return response.choices[0].message.content
@@ -121,7 +144,7 @@ if "system_prompt" not in st.session_state:
         "Asla anlamsız, kopuk, rüya benzeri veya saçma cümleler kurma; her zaman mantıklı bir bütünlük içinde konuş."
     )
 
-# Giriş, Üye Ol ve Profil Modalları (Dialogs)
+# Giriş, Üye Ol ve Gelişmiş Profil Modalları (Dialogs)
 @st.dialog("✨ Lunara.ai - Giriş Yap")
 def login_dialog():
     st.write("Yıldızların rehberliğine tekrar hoş geldin.")
@@ -162,7 +185,12 @@ def signup_dialog():
                     st.session_state.users[s_email] = {
                         "name": s_name, 
                         "password": s_pass, 
-                        "email_notifications": True
+                        "email_notifications": True,
+                        "location": "",
+                        "birth_date": None,
+                        "birth_time": None,
+                        "bio": "",
+                        "saved_readings": []
                     }
                     st.session_state.logged_in_email = s_email
                     st.session_state.logged_in_user = s_name
@@ -176,7 +204,7 @@ def signup_dialog():
             st.session_state.auth_mode = None
             st.rerun()
 
-@st.dialog("⚙️ Profil Ayarları ve Bildirimler")
+@st.dialog("⚙️ Gelişmiş Profil ve Mistik Tercihler")
 def profile_dialog():
     email = st.session_state.logged_in_email
     if not email or email not in st.session_state.users:
@@ -187,12 +215,43 @@ def profile_dialog():
         return
 
     user_data = st.session_state.users[email]
-    st.write("Kişisel bilgilerinizi düzenleyebilir ve bildirim tercihlerinizi yönetebilirsiniz.")
+    st.write("Kişisel bilgilerinizi, şifrenizi, doğum haritası verilerinizi ve konumunuzu yönetin.")
 
-    new_name = st.text_input("Ad Soyad", value=user_data["name"], key="prof_name")
+    new_name = st.text_input("Ad Soyad", value=user_data.get("name", ""), key="prof_name")
     st.text_input("E-posta Adresi (Değiştirilemez)", value=email, disabled=True, key="prof_email")
-    new_pass = st.text_input("Şifre", type="password", value=user_data["password"], key="prof_pass")
+    new_pass = st.text_input("Yeni Şifre", type="password", value=user_data.get("password", ""), key="prof_pass")
     
+    # Konum Ayarı (Otomatik ve Manüel Seçenek)
+    st.markdown("### 📍 Konum Ayarları")
+    loc_mode = st.radio("Konum Belirleme Yöntemi", ["Manüel Gir", "Otomatik Algıla (IP ile)"], horizontal=True, key="prof_loc_mode")
+    
+    current_loc_val = user_data.get("location", "")
+    if loc_mode == "Otomatik Algıla (IP ile)":
+        if st.button("🌍 Konumumu Otomatik Bul", key="auto_loc_btn"):
+            try:
+                url = "https://ipapi.co/json/"
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=3) as response:
+                    geo_data = json.loads(response.read().decode())
+                    city = geo_data.get('city', '')
+                    country = geo_data.get('country_name', '')
+                    current_loc_val = f"{city}, {country}".strip(", ")
+                    st.success(f"Konum başarıyla tespit edildi: {current_loc_val}")
+            except Exception:
+                st.error("Otomatik konum algılanamadı, lütfen manüel olarak giriniz.")
+                
+    new_location = st.text_input("Konum (Şehir / Ülke)", value=current_loc_val, key="prof_location_input", placeholder="Örn: İstanbul, Türkiye")
+
+    col_b1, col_b2 = st.columns(2)
+    with col_b1:
+        default_date = user_data.get("birth_date") or datetime.date(1995, 1, 1)
+        new_birth_date = st.date_input("Doğum Tarihi", value=default_date, min_value=datetime.date(1900, 1, 1), max_value=datetime.date.today(), key="prof_birth_date")
+    with col_b2:
+        default_time = user_data.get("birth_time") or datetime.time(12, 0)
+        new_birth_time = st.time_input("Doğum Saati", value=default_time, key="prof_birth_time")
+
+    new_bio = st.text_area("Ruhsal Biyografi / Notlar", value=user_data.get("bio", ""), placeholder="Yıldız haritanız veya ruhsal yolculuğunuz hakkındaki kişisel notlarınız...", key="prof_bio")
+
     email_notif = st.checkbox(
         "E-posta bildirimleri al (Günlük fal, özel tarot ve burç uyarıları)", 
         value=user_data.get("email_notifications", True),
@@ -204,9 +263,13 @@ def profile_dialog():
         if st.button("Değişiklikleri Kaydet", use_container_width=True, key="save_profile"):
             st.session_state.users[email]["name"] = new_name
             st.session_state.users[email]["password"] = new_pass
+            st.session_state.users[email]["location"] = new_location
+            st.session_state.users[email]["birth_date"] = new_birth_date
+            st.session_state.users[email]["birth_time"] = new_birth_time
+            st.session_state.users[email]["bio"] = new_bio
             st.session_state.users[email]["email_notifications"] = email_notif
             st.session_state.logged_in_user = new_name
-            st.success("Profil ayarlarınız başarıyla güncellendi!")
+            st.success("Profil ve mistik ayarlarınız güncellendi!")
             st.session_state.auth_mode = None
             st.rerun()
     with col_p2:
@@ -221,10 +284,47 @@ elif st.session_state.auth_mode == "signup":
 elif st.session_state.auth_mode == "profile":
     profile_dialog()
 
-# Yan Panel
+# Yan Panel (Sol Üst Köşede Üye Ol / Giriş Yap Menüsü)
 with st.sidebar:
     st.title("🌙 Lunara.ai")
     st.caption("Astroloji & Kehanet Rehberi")
+
+    st.markdown("---")
+    
+    # Sol üst köşeye yerleştirilen Üye Ol / Giriş Yap menüsü
+    if st.session_state.logged_in_email:
+        u_record = st.session_state.users.get(st.session_state.logged_in_email, {})
+        st.markdown(f"✨ **{st.session_state.logged_in_user}**")
+        
+        b_date = u_record.get("birth_date")
+        if b_date:
+            zodiac = get_zodiac_sign(b_date)
+            st.caption(f"🌟 Burç: {zodiac}")
+        user_loc = u_record.get("location")
+        if user_loc:
+            st.caption(f"📍 {user_loc}")
+            
+        col_sb1, col_sb2 = st.columns(2)
+        with col_sb1:
+            if st.button("⚙️ Profil", key="sidebar_profile_btn", use_container_width=True):
+                st.session_state.auth_mode = "profile"
+                st.rerun()
+        with col_sb2:
+            if st.button("Çıkış", key="sidebar_logout_btn", use_container_width=True):
+                st.session_state.logged_in_email = None
+                st.session_state.logged_in_user = None
+                st.session_state.auth_mode = None
+                st.rerun()
+    else:
+        col_sb1, col_sb2 = st.columns(2)
+        with col_sb1:
+            if st.button("Giriş Yap", key="sidebar_login_btn", use_container_width=True):
+                st.session_state.auth_mode = "login"
+                st.rerun()
+        with col_sb2:
+            if st.button("Üye Ol", key="sidebar_signup_btn", use_container_width=True):
+                st.session_state.auth_mode = "signup"
+                st.rerun()
 
     st.markdown("---")
     st.subheader("✨ Günün Mistik Enerjisi")
@@ -243,6 +343,16 @@ with st.sidebar:
                 recent_selected_prompt = q
 
     st.markdown("---")
+    if st.session_state.messages:
+        chat_export_data = json.dumps(st.session_state.messages, ensure_ascii=False, indent=2)
+        st.download_button(
+            label="📥 Sohbet Geçmişini İndir",
+            data=chat_export_data,
+            file_name="lunara_sohbet_gecmisi.json",
+            mime="application/json",
+            use_container_width=True
+        )
+
     if st.button("🗑️ Sohbet Geçmişini Temizle", use_container_width=True):
         st.session_state.messages = []
         st.session_state.recent_queries = []
@@ -265,38 +375,9 @@ if recent_selected_prompt:
             prompt_messages.append({"role": m["role"], "content": m["content"]})
         prompt_messages.append({"role": "user", "content": recent_selected_prompt})
 
-        # Varsayılan model ile tetikle
         response = generate_completion(prompt_messages, model_name="llama-3.3-70b-versatile")
         st.session_state.messages.append({"role": "assistant", "content": response})
     st.rerun()
-
-# En Üst Sağ Köşe: Giriş Yap / Üye Ol veya Profil/Çıkış Alanı
-top_space_col1, top_space_col2 = st.columns([7, 4])
-with top_space_col2:
-    if st.session_state.logged_in_email:
-        u_c1, u_c2, u_c3 = st.columns([2, 1.2, 1])
-        with u_c1:
-            st.markdown(f"<div style='text-align: right; padding-top: 8px; font-size: 0.85em;'>✨ <b>{st.session_state.logged_in_user}</b></div>", unsafe_allow_html=True)
-        with u_c2:
-            if st.button("⚙️ Profil", key="profile_btn", use_container_width=True):
-                st.session_state.auth_mode = "profile"
-                st.rerun()
-        with u_c3:
-            if st.button("Çıkış", key="logout_btn", use_container_width=True):
-                st.session_state.logged_in_email = None
-                st.session_state.logged_in_user = None
-                st.session_state.auth_mode = None
-                st.rerun()
-    else:
-        auth_c1, auth_c2 = st.columns(2)
-        with auth_c1:
-            if st.button("Giriş Yap", key="top_login_btn", use_container_width=True):
-                st.session_state.auth_mode = "login"
-                st.rerun()
-        with auth_c2:
-            if st.button("Üye Ol", key="top_signup_btn", use_container_width=True):
-                st.session_state.auth_mode = "signup"
-                st.rerun()
 
 # Ana Başlık Alanı
 st.title("🌙 Lunara.ai | Mistik Rehber")
@@ -328,7 +409,6 @@ with tab1:
     if col_h4.button("🃏 Tarot & Kader", use_container_width=True):
         quick_prompt_to_send = "Geleceğime ışık tutacak bir kart çekerek bana rehberlik eder misin?"
 
-    # Hızlı butonlara tıklandığında doğrudan mesajı ekle ve yanıt üret
     if quick_prompt_to_send:
         if quick_prompt_to_send not in st.session_state.recent_queries:
             st.session_state.recent_queries.append(quick_prompt_to_send)
@@ -348,23 +428,49 @@ with tab1:
 
     st.warning("🤖 Hoş geldin. Ben Lunara. Yıldızların fısıltıları, kartların gizemi ve evrenin sırlarıyla sana rehberlik etmek için buradayım.")
 
-    for msg in st.session_state.messages:
+    for idx, msg in enumerate(st.session_state.messages):
         avatar_icon = "👤" if msg["role"] == "user" else "🌙"
         with st.chat_message(msg["role"], avatar=avatar_icon):
             st.write(msg["content"])
+            if msg["role"] == "assistant" and st.session_state.logged_in_email:
+                if st.button("⭐ Favorilere Ekle", key=f"fav_msg_{idx}"):
+                    user_email = st.session_state.logged_in_email
+                    if "saved_readings" not in st.session_state.users[user_email]:
+                        st.session_state.users[user_email]["saved_readings"] = []
+                    if msg["content"] not in st.session_state.users[user_email]["saved_readings"]:
+                        st.session_state.users[user_email]["saved_readings"].append(msg["content"])
+                        st.success("Kehanet favorilerinize eklendi!")
+                    else:
+                        st.info("Bu kehanet zaten favorilerinizde kayıtlı.")
 
 # Sekme 2: Doğum Haritası Analizi
 with tab2:
     st.subheader("🪐 Doğum Haritası Potansiyel Analizi")
+    
+    default_ad = ""
+    default_tarih = datetime.date(1995, 1, 1)
+    default_saat = datetime.time(12, 0)
+    default_sehir = ""
+
+    if st.session_state.logged_in_email and st.session_state.logged_in_email in st.session_state.users:
+        u_data = st.session_state.users[st.session_state.logged_in_email]
+        default_ad = u_data.get("name", "")
+        default_sehir = u_data.get("location", "")
+        if u_data.get("birth_date"):
+            default_tarih = u_data.get("birth_date")
+        if u_data.get("birth_time"):
+            default_saat = u_data.get("birth_time")
+
     with st.form("astro_form"):
-        ad = st.text_input("Adınız ve Soyadınız")
+        ad = st.text_input("Adınız ve Soyadınız", value=default_ad)
         tarih = st.date_input(
             "Doğum Tarihiniz", 
+            value=default_tarih,
             min_value=datetime.date(1900, 1, 1), 
             max_value=datetime.date.today()
         )
-        saat = st.time_input("Doğum Saatiniz (Tahmini)")
-        sehir = st.text_input("Doğum Yeri (İl/Ülke)")
+        saat = st.time_input("Doğum Saatiniz (Tahmini)", value=default_saat)
+        sehir = st.text_input("Doğum Yeri (İl/Ülke)", value=default_sehir)
         submit = st.form_submit_button("🪐 Haritayı Analiz Et")
 
     if submit and ad and sehir:
