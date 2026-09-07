@@ -3,6 +3,7 @@ import datetime
 import json
 import re
 import sqlite3
+import hashlib
 import streamlit as st
 from groq import Groq
 
@@ -39,6 +40,50 @@ def init_db():
     conn.close()
 
 init_db()
+
+# --- GÜVENLİK VE ŞİFRE YARDIMCI FONKSİYONLARI ---
+
+def hash_password(password: str) -> str:
+    """Şifreyi SHA-256 algoritması ile hash'ler."""
+    return hashlib.sha256(password.encode('utf-8')).hexdigest()
+
+def verify_password(stored_password: str, provided_password: str) -> bool:
+    """Hash'lenmiş veya eski açık metin şifreleri doğrular."""
+    if len(stored_password) == 64 and all(c in '0123456789abcdefABCDEF' for c in stored_password):
+        return stored_password == hash_password(provided_password)
+    return stored_password == provided_password  # Eski düz metin şifreler için geriye dönük uyumluluk
+
+def check_password_strength(password: str):
+    """Şifre gücünü ve eksik kriterleri kontrol eder."""
+    score = 0
+    feedback = []
+    
+    if len(password) >= 8:
+        score += 1
+    else:
+        feedback.append("En az 8 karakter olmalı.")
+        
+    if re.search(r"[A-Z]", password):
+        score += 1
+    else:
+        feedback.append("En az 1 büyük harf (A-Z) içermeli.")
+        
+    if re.search(r"[a-z]", password):
+        score += 1
+    else:
+        feedback.append("En az 1 küçük harf (a-z) içermeli.")
+        
+    if re.search(r"[0-9]", password):
+        score += 1
+    else:
+        feedback.append("En az 1 rakam (0-9) içermeli.")
+        
+    if re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
+        score += 1
+    else:
+        feedback.append("En az 1 özel karakter (!@#$%^&* vb.) içermeli.")
+        
+    return score, feedback
 
 # --- VERİTABANI YARDIMCI FONKSİYONLARI ---
 
@@ -150,7 +195,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# EN UYGUN 3 MODEL TANIMI VE ETİKETLERİ
+# MODEL TANIMLARI
 MODEL_OPTIONS = {
     "🧠 Gelişmiş (Llama 3.3 70B)": "llama-3.3-70b-versatile",
     "⚡ Hızlı (Llama 3.1 8B)": "llama-3.1-8b-instant",
@@ -174,7 +219,6 @@ def get_groq_client():
 
 @st.cache_data(ttl=300)
 def get_groq_models_list():
-    """Groq API'den aktif tüm modelleri sorgular."""
     client = get_groq_client()
     if not client:
         return []
@@ -276,15 +320,22 @@ def deduct_credits(model_id):
         st.session_state.guest_credits -= required_cost
     return True
 
-# Modallar
+# --- MODALLAR VE DİYALOGLAR ---
+
 @st.dialog("✨ Lunara.ai - Giriş Yap")
 def login_dialog():
     l_email = st.text_input("E-posta Adresi")
     l_pass = st.text_input("Şifre", type="password")
+    
     col1, col2 = st.columns(2)
     if col1.button("Giriş Yap", use_container_width=True):
         user_data = db_get_user(l_email)
-        if user_data and user_data["password"] == l_pass:
+        if user_data and verify_password(user_data["password"], l_pass):
+            # Otomatik Hash Güncelleme (Eski düz metin şifreleri hash'e dönüştürür)
+            if user_data["password"] == l_pass:
+                user_data["password"] = hash_password(l_pass)
+                db_save_user(l_email, user_data)
+                
             st.session_state.logged_in_email = l_email
             st.session_state.logged_in_user = user_data["name"]
             st.session_state.messages = db_get_chat_history(l_email)
@@ -292,8 +343,14 @@ def login_dialog():
             st.rerun()
         else:
             st.error("Hatalı e-posta veya şifre!")
+            
     if col2.button("İptal", use_container_width=True):
         st.session_state.auth_mode = None
+        st.rerun()
+
+    st.markdown("---")
+    if st.button("🔑 Şifremi Unuttum", use_container_width=True):
+        st.session_state.auth_mode = "forgot_pass"
         st.rerun()
 
 @st.dialog("✨ Lunara.ai - Üye Ol")
@@ -301,18 +358,89 @@ def signup_dialog():
     s_name = st.text_input("Ad Soyad")
     s_email = st.text_input("E-posta Adresi")
     s_pass = st.text_input("Şifre", type="password")
+    
+    # ŞİFRE GÜÇ GÖSTERGESİ
+    if s_pass:
+        score, feedback = check_password_strength(s_pass)
+        progress_val = min(score / 5.0, 1.0)
+        st.caption(f"Şifre Gücü: **%{int(progress_val * 100)}**")
+        st.progress(progress_val)
+        if feedback:
+            for fb in feedback:
+                st.caption(f"⚠️ {fb}")
+    
+    st.markdown("---")
+    
+    # KVKK VE KULLANIM KOŞULLARI ONAYI
+    with st.expander("📜 KVKK Aydınlatma Metni & Kullanım Koşulları"):
+        st.write("""
+        **1. Kişisel Verilerin Korunması:** Lunara.ai, kişisel verilerinizi 6698 sayılı KVKK gereğince yalnızca yapay zeka tabanlı astroloji/fal hizmeti sunmak ve üyelik işlemlerini yürütmek amacıyla işler.
+        
+        **2. Veri Güvenliği:** Şifreleriniz SHA-256 kriptografik yöntemlerle şifrelenerek saklanır.
+        
+        **3. Hizmet Şartları:** Üretilen içerikler eğlence ve kişisel gelişim amaçlıdır, kesin veya tıbbi/hukuki tavsiye niteliği taşımaz.
+        """)
+        
+    kvkk_check = st.checkbox("KVKK Aydınlatma Metni'ni ve Kullanım Koşulları'nı okudum, kabul ediyorum.")
+    
     col1, col2 = st.columns(2)
     if col1.button("Kayıt Ol", use_container_width=True):
-        if s_name and s_email and s_pass:
-            if db_get_user(s_email):
-                st.warning("Bu e-posta zaten kullanımda.")
+        if not s_name or not s_email or not s_pass:
+            st.error("⚠️ Lütfen tüm alanları doldurun.")
+        elif not kvkk_check:
+            st.warning("⚠️ Devam etmek için KVKK ve Kullanım Koşulları'nı onaylamalısınız.")
+        else:
+            score, _ = check_password_strength(s_pass)
+            if score < 3:
+                st.error("⚠️ Lütfen daha güçlü bir şifre seçin (En az 8 karakter, harf ve rakam içermelidir).")
+            elif db_get_user(s_email):
+                st.warning("⚠️ Bu e-posta zaten kullanımda.")
             else:
-                db_save_user(s_email, {"name": s_name, "password": s_pass, "credits": 20})
+                hashed_pass = hash_password(s_pass)
+                db_save_user(s_email, {"name": s_name, "password": hashed_pass, "credits": 20})
                 st.session_state.logged_in_email = s_email
                 st.session_state.logged_in_user = s_name
                 st.session_state.messages = []
                 st.session_state.auth_mode = None
                 st.rerun()
+
+    if col2.button("İptal", use_container_width=True):
+        st.session_state.auth_mode = None
+        st.rerun()
+
+@st.dialog("🔑 Şifremi Unuttum")
+def forgot_password_dialog():
+    f_email = st.text_input("Kayıtlı E-posta Adresiniz")
+    new_pass = st.text_input("Yeni Şifre", type="password")
+    confirm_pass = st.text_input("Yeni Şifre (Tekrar)", type="password")
+    
+    if new_pass:
+        score, feedback = check_password_strength(new_pass)
+        progress_val = min(score / 5.0, 1.0)
+        st.caption(f"Şifre Gücü: **%{int(progress_val * 100)}**")
+        st.progress(progress_val)
+        if feedback:
+            for fb in feedback:
+                st.caption(f"⚠️ {fb}")
+
+    col1, col2 = st.columns(2)
+    if col1.button("Şifreyi Güncelle", use_container_width=True):
+        user_data = db_get_user(f_email)
+        if not user_data:
+            st.error("⚠️ Bu e-posta adresiyle kayıtlı bir kullanıcı bulunamadı.")
+        elif new_pass != confirm_pass:
+            st.error("⚠️ Girilen şifreler eşleşmiyor!")
+        else:
+            score, _ = check_password_strength(new_pass)
+            if score < 3:
+                st.error("⚠️ Lütfen daha güçlü bir şifre belirleyin.")
+            else:
+                user_data["password"] = hash_password(new_pass)
+                db_save_user(f_email, user_data)
+                st.success("✅ Şifreniz başarıyla güncellendi! Giriş yapabilirsiniz.")
+                st.session_state.auth_mode = "login"
+                st.rerun()
+
     if col2.button("İptal", use_container_width=True):
         st.session_state.auth_mode = None
         st.rerun()
@@ -328,22 +456,40 @@ def profile_dialog():
         st.rerun()
     
     new_name = st.text_input("Ad Soyad", value=user_data.get("name", ""))
-    new_pass = st.text_input("Şifre", type="password", value=user_data.get("password", ""))
+    new_pass = st.text_input("Yeni Şifre (Boş bırakırsanız değişmez)", type="password")
     new_loc = st.text_input("Konum", value=user_data.get("location", ""))
+    
+    if new_pass:
+        score, feedback = check_password_strength(new_pass)
+        progress_val = min(score / 5.0, 1.0)
+        st.caption(f"Yeni Şifre Gücü: **%{int(progress_val * 100)}**")
+        st.progress(progress_val)
+        if feedback:
+            for fb in feedback:
+                st.caption(f"⚠️ {fb}")
     
     col1, col2 = st.columns(2)
     if col1.button("Kaydet", use_container_width=True):
-        user_data.update({"name": new_name, "password": new_pass, "location": new_loc})
+        if new_pass:
+            score, _ = check_password_strength(new_pass)
+            if score < 3:
+                st.error("⚠️ Yeni şifreniz yeterince güçlü değil.")
+                return
+            user_data["password"] = hash_password(new_pass)
+            
+        user_data.update({"name": new_name, "location": new_loc})
         db_save_user(email, user_data)
         st.session_state.logged_in_user = new_name
         st.session_state.auth_mode = None
         st.rerun()
+        
     if col2.button("İptal", use_container_width=True):
         st.session_state.auth_mode = None
         st.rerun()
 
 if st.session_state.auth_mode == "login": login_dialog()
 elif st.session_state.auth_mode == "signup": signup_dialog()
+elif st.session_state.auth_mode == "forgot_pass": forgot_password_dialog()
 elif st.session_state.auth_mode == "profile": profile_dialog()
 
 # Yan Panel
@@ -421,7 +567,6 @@ with tab1:
     if q_prompt:
         if process_chat_request(q_prompt): st.rerun()
 
-    # EN SON YAZILAN MESAJIN EN ÜSTTE GÖRÜNMESİ İÇİN (reversed)
     for msg in reversed(st.session_state.messages):
         with st.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "🌙"):
             st.write(msg["content"])
@@ -430,7 +575,6 @@ with tab1:
 with tab2:
     st.subheader("🪐 Doğum Haritası Potansiyel Analizi")
     
-    # EN SON SONUCU EN ÜSTTE GÖSTER
     if st.session_state.get("astro_result"):
         st.markdown(st.session_state.astro_result)
         st.markdown("---")
@@ -504,7 +648,6 @@ with tab2:
 
 # --- TAB 3: 3 KART TAROT ---
 with tab3:
-    # EN SON SONUCU EN ÜSTTE GÖSTER
     if st.session_state.tarot_result: 
         st.write(st.session_state.tarot_result)
         st.markdown("---")
@@ -519,7 +662,6 @@ with tab3:
 
 # --- TAB 4: KAHVE FALI ---
 with tab4:
-    # EN SON SONUCU EN ÜSTTE GÖSTER
     if st.session_state.kahve_result: 
         st.write(st.session_state.kahve_result)
         st.markdown("---")
