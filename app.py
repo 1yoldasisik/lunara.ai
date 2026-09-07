@@ -8,6 +8,20 @@ import urllib.request
 import streamlit as st
 from groq import Groq
 
+# Türkiye Şehir Listesi
+TURKEY_CITIES = [
+    "Adana", "Adıyaman", "Afyonkarahisar", "Ağrı", "Aksaray", "Amasya", "Ankara", "Antalya", 
+    "Ardahan", "Artvin", "Aydın", "Balıkesir", "Bartın", "Batman", "Bayburt", "Bilecik", 
+    "Bingöl", "Bitlis", "Bolu", "Burdur", "Bursa", "Çanakkale", "Çankırı", "Çorum", 
+    "Denizli", "Diyarbakır", "Düzce", "Edirne", "Elazığ", "Erzincan", "Erzurum", "Eskişehir", 
+    "Gaziantep", "Giresun", "Gümüşhane", "Hakkari", "Hatay", "Iğdır", "Isparta", "İstanbul", 
+    "İzmir", "Kahramanmaraş", "Karabük", "Karaman", "Kars", "Kastamonu", "Kayseri", "Kırıkkale", 
+    "Kırklareli", "Kırşehir", "Kilis", "Kocaeli", "Konya", "Kütahya", "Malatya", "Manisa", 
+    "Mardin", "Mersin", "Muğla", "Muş", "Nevşehir", "Niğde", "Ordu", "Osmaniye", "Rize", 
+    "Sakarya", "Samsun", "Siirt", "Sinop", "Sivas", "Şanlıurfa", "Şırnak", "Tekirdağ", 
+    "Tokat", "Trabzon", "Tunceli", "Uşak", "Van", "Yalova", "Yozgat", "Zonguldak"
+]
+
 # SQLite Veritabanı Yapılandırması
 DB_FILE = "lunara.db"
 
@@ -45,9 +59,22 @@ init_db()
 # --- YARDIMCI FONKSİYONLAR (KONUM & GÜVENLİK) ---
 
 def get_auto_location():
-    """Kullanıcının IP adresinden şehir ve ülke bilgisini otomatik tespit eder."""
+    """Kullanıcının tarayıcı/istemci IP adresinden şehir ve ülke bilgisini tespit eder."""
     try:
-        url = "http://ip-api.com/json/"
+        client_ip = ""
+        # Streamlit HTTP istek başlıklarından gerçek istemci IP'sini alma (Sunucu IP'sini önlemek için)
+        if hasattr(st, "context") and hasattr(st.context, "headers"):
+            headers = st.context.headers
+            if headers:
+                for header_key in ["x-forwarded-for", "cf-connecting-ip", "x-real-ip"]:
+                    for h_k, h_v in headers.items():
+                        if h_k.lower() == header_key:
+                            client_ip = h_v.split(",")[0].strip()
+                            break
+                    if client_ip:
+                        break
+
+        url = f"http://ip-api.com/json/{client_ip}" if client_ip else "http://ip-api.com/json/"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=3) as response:
             data = json.loads(response.read().decode())
@@ -469,18 +496,28 @@ def profile_dialog():
     
     new_name = st.text_input("Ad Soyad", value=user_data.get("name", ""))
     
-    # --- OTOMATİK KONUM BULMA ---
+    # --- KONUM SEÇİMİ VE OTOMATİK BULMA ---
     st.write("**Konum Bilgisi:**")
+    
+    # Türkiye Şehirleri Açılır Listesi
+    selected_tr_city = st.selectbox(
+        "🇹🇷 Türkiye'den Şehir Seçin (İsteğe Bağlı):",
+        options=["-- Seçiniz veya Elle Giriniz --"] + [f"{city}, Türkiye" for city in TURKEY_CITIES]
+    )
+    
     current_loc = st.session_state.get("temp_location", user_data.get("location", ""))
+    if selected_tr_city != "-- Seçiniz veya Elle Giriniz --":
+        current_loc = selected_tr_city
+
     col_loc1, col_loc2 = st.columns([3, 1])
     with col_loc1:
-        new_loc = st.text_input("Konum (İl/Ülke)", value=current_loc, label_visibility="collapsed")
+        new_loc = st.text_input("Konum (İl/Ülke veya Özel Konum)", value=current_loc, label_visibility="collapsed")
     with col_loc2:
         if st.button("📍 Otomatik Bul", use_container_width=True):
             auto_loc = get_auto_location()
             if auto_loc:
                 st.session_state["temp_location"] = auto_loc
-                st.toast(f"📍 Konumunuz tespit edildi: {auto_loc}")
+                st.toast(f"📍 Güncel konumunuz tespit edildi: {auto_loc}")
                 st.rerun()
             else:
                 st.error("Konumunuz tespit edilemedi.")
@@ -493,9 +530,8 @@ def profile_dialog():
     
     st.markdown("---")
     
-    # --- ŞİFRE DEĞİŞTİRME & ŞİFRE ONAYI ---
+    # --- ŞİFRE DEĞİŞTİRME (ESKİ ŞİFRE SORULMAZ) ---
     st.write("🔒 **Şifre Değiştirme** (Şifrenizi değiştirmek istemiyorsanız alanları boş bırakın)")
-    current_pass = st.text_input("Mevcut Şifreniz", type="password", key="p_curr")
     new_pass = st.text_input("Yeni Şifreniz", type="password", key="p_new")
     confirm_new_pass = st.text_input("Yeni Şifreniz (Tekrar)", type="password", key="p_conf")
     
@@ -510,14 +546,8 @@ def profile_dialog():
     
     col1, col2 = st.columns(2)
     if col1.button("Kaydet", use_container_width=True):
-        # Şifre Değişikliği İstendiyse Doğrulama Adımları
-        if new_pass or current_pass or confirm_new_pass:
-            if not current_pass:
-                st.error("⚠️ Şifre değiştirmek için mevcut şifrenizi girmelisiniz!")
-                return
-            if not verify_password(user_data["password"], current_pass):
-                st.error("⚠️ Mevcut şifreniz hatalı!")
-                return
+        # Şifre Değişikliği İsteği
+        if new_pass or confirm_new_pass:
             if not new_pass:
                 st.error("⚠️ Lütfen yeni bir şifre girin!")
                 return
