@@ -1,19 +1,124 @@
 import os
 import datetime
 import json
-import urllib.request
+import re
+import sqlite3
 import streamlit as st
 from groq import Groq
 
-# Sayfa ve Tema Yapılandırması
-st.set_page_config(
-    page_title="Lunara.ai | Mistik Rehber",
-    page_icon="🌙",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# SQLite Veritabanı Yapılandırması
+DB_FILE = "lunara.db"
 
-# Sohbet çubuğunu sabitleyen ve genel görünümü düzenleyen CSS
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            email TEXT PRIMARY KEY,
+            name TEXT,
+            password TEXT,
+            location TEXT,
+            birth_date TEXT,
+            birth_time TEXT,
+            bio TEXT,
+            email_notifications INTEGER,
+            credits INTEGER,
+            saved_readings TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS chat_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT,
+            role TEXT,
+            content TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# --- VERİTABANI YARDIMCI FONKSİYONLARI ---
+
+def db_get_user(email):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT name, password, location, birth_date, birth_time, bio, email_notifications, credits, saved_readings FROM users WHERE email = ?", (email,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {
+            "name": row[0],
+            "password": row[1],
+            "location": row[2],
+            "birth_date": datetime.date.fromisoformat(row[3]) if row[3] else None,
+            "birth_time": datetime.datetime.strptime(row[4], "%H:%M:%S").time() if row[4] else None,
+            "bio": row[5],
+            "email_notifications": bool(row[6]),
+            "credits": row[7],
+            "saved_readings": json.loads(row[8]) if row[8] else []
+        }
+    return None
+
+def db_save_user(email, data):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    b_date_str = data["birth_date"].isoformat() if data.get("birth_date") else None
+    b_time_str = data["birth_time"].strftime("%H:%M:%S") if data.get("birth_time") else None
+    saved_readings_str = json.dumps(data.get("saved_readings", []), ensure_ascii=False)
+    
+    cursor.execute('''
+        INSERT OR REPLACE INTO users (email, name, password, location, birth_date, birth_time, bio, email_notifications, credits, saved_readings)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        email,
+        data.get("name"),
+        data.get("password"),
+        data.get("location"),
+        b_date_str,
+        b_time_str,
+        data.get("bio"),
+        1 if data.get("email_notifications", True) else 0,
+        data.get("credits", 20),
+        saved_readings_str
+    ))
+    conn.commit()
+    conn.close()
+
+def db_save_chat_message(email, role, content):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO chat_history (email, role, content)
+        VALUES (?, ?, ?)
+    ''', (email, role, content))
+    conn.commit()
+    conn.close()
+
+def db_get_chat_history(email):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT role, content FROM chat_history
+        WHERE email = ?
+        ORDER BY timestamp ASC
+    ''', (email,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [{"role": row[0], "content": row[1]} for row in rows]
+
+def db_clear_chat_history(email):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM chat_history WHERE email = ?", (email,))
+    conn.commit()
+    conn.close()
+
+# Sayfa ve Tema Yapılandırması
+st.set_page_config(page_title="Lunara.ai | Mistik Rehber", page_icon="🌙", layout="wide", initial_sidebar_state="expanded")
+
 st.markdown("""
 <style>
     [data-testid="stForm"] [data-testid="stHorizontalBlock"] {
@@ -26,8 +131,6 @@ st.markdown("""
         flex: 1 1 0% !important;
         min-width: 0px !important;
     }
-    
-    /* Sohbet çubuğunu en alta sabitleme (Gemini tarzı) */
     form:has(input[placeholder*="Fal, tarot veya burçlar"]) {
         position: fixed !important;
         bottom: 0 !important;
@@ -41,35 +144,12 @@ st.markdown("""
         width: 100% !important;
         box-sizing: border-box !important;
     }
-
-    /* Sayfa içeriğinin sabit çubuğun altında kalmaması için alt boşluk */
     .main .block-container {
         padding-bottom: 140px !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Burç Hesaplama Yardımcı Fonksiyonu
-def get_zodiac_sign(date_val):
-    if not date_val:
-        return "Bilinmiyor"
-    day = date_val.day
-    month = date_val.month
-    
-    if (month == 3 and day >= 21) or (month == 4 and day <= 20): return "Koç ♈"
-    elif (month == 4 and day >= 21) or (month == 5 and day <= 20): return "Boğa ♉"
-    elif (month == 5 and day >= 21) or (month == 6 and day <= 21): return "İkizler ♊"
-    elif (month == 6 and day >= 22) or (month == 7 and day <= 22): return "Yengeç ♋"
-    elif (month == 7 and day >= 23) or (month == 8 and day <= 22): return "Aslan ♌"
-    elif (month == 8 and day >= 23) or (month == 9 and day <= 22): return "Başak ♍"
-    elif (month == 9 and day >= 23) or (month == 10 and day <= 22): return "Terazi ♎"
-    elif (month == 10 and day >= 23) or (month == 11 and day <= 21): return "Akrep ♏"
-    elif (month == 11 and day >= 22) or (month == 12 and day <= 21): return "Yay ♐"
-    elif (month == 12 and day >= 22) or (month == 1 and day <= 19): return "Oğlak ♑"
-    elif (month == 1 and day >= 20) or (month == 2 and day <= 18): return "Kova ♒"
-    else: return "Balık ♓"
-
-# Groq API ve Model Yönetimi
 def get_groq_api_key():
     try:
         key = st.secrets.get("GROQ_API_KEY")
@@ -79,371 +159,267 @@ def get_groq_api_key():
         key = os.environ.get("GROQ_API_KEY")
     return key
 
-
 def get_groq_client():
     api_key = get_groq_api_key()
     if not api_key:
         return None
     return Groq(api_key=api_key)
 
+@st.cache_data(ttl=300)
+def get_groq_models_list():
+    """Groq API'den hesabınızda aktif olan modelleri dinamik çeker."""
+    client = get_groq_client()
+    if not client:
+        return []
+    try:
+        models_data = client.models.list()
+        valid_models = []
+        for m in models_data.data:
+            m_id = getattr(m, 'id', '')
+            if m_id and not any(x in m_id.lower() for x in ['whisper', 'audio', 'embed', 'guard', 'vision', 'safetensors']):
+                valid_models.append(m_id)
+        return valid_models
+    except Exception:
+        return []
 
 def generate_completion(messages, model_name=None):
     client = get_groq_client()
     if client is None:
-        return "Groq API anahtarı eksik. Lütfen yapılandırma dosyasını veya ortam değişkenini kontrol edin."
+        return "Groq API anahtarı bulunamadı. Lütfen st.secrets veya ortam değişkenlerini kontrol edin."
 
-    try:
-        models_response = client.models.list()
-        available_models = [
-            m.id for m in models_response.data 
-            if not any(x in m.id.lower() for x in ["guard", "whisper", "embed"])
-        ]
-        
-        if model_name and model_name in available_models:
-            chosen_model = model_name
-        elif available_models:
-            preferred = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "llama-3.1-8b-instant", "llama3-70b-8192", "mixtral-8x7b-32768"]
-            chosen_model = next((m for m in preferred if m in available_models), available_models[0])
-        else:
-            chosen_model = "llama-3.3-70b-versatile"
+    active_models = get_groq_models_list()
+    
+    candidate_models = []
+    if model_name:
+        candidate_models.append(model_name)
+    candidate_models.extend(active_models)
+    
+    # Standart yedek listesi
+    fallback_models = [
+        "llama-3.1-8b-instant",
+        "llama-3.3-70b-versatile",
+        "gemma2-9b-it",
+        "mixtral-8x7b-32768",
+        "llama3-8b-8192"
+    ]
+    candidate_models.extend(fallback_models)
 
-        response = client.chat.completions.create(
-            model=chosen_model,
-            messages=messages,
-            temperature=0.4,
-            top_p=0.9,
-            max_tokens=2048,
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        return f"Bir hata oluştu: {str(e)}"
+    # Yinelenenleri sıralamayı bozmadan temizle
+    models_to_try = []
+    for m in candidate_models:
+        if m and m not in models_to_try:
+            models_to_try.append(m)
 
-# Oturum ve Kullanıcı Belleği Yönetimi
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+    last_error = ""
+    for current_model in models_to_try:
+        try:
+            response = client.chat.completions.create(
+                model=current_model,
+                messages=messages,
+                temperature=0.4,
+                max_tokens=1500,
+            )
+            if response and response.choices:
+                content = response.choices[0].message.content
+                clean_content = re.sub(r'<think>[\s\S]*?</think>', '', content).strip()
+                return clean_content
+        except Exception as e:
+            last_error = str(e)
+            continue
+            
+    return f"Yıldızlardan şu an yanıt alınamadı. (Groq API Hata Detayı: {last_error})"
 
-if "recent_queries" not in st.session_state:
-    st.session_state.recent_queries = []
-
-if "auth_mode" not in st.session_state:
-    st.session_state.auth_mode = None
-
-if "users" not in st.session_state:
-    st.session_state.users = {}
-
-if "logged_in_user" not in st.session_state:
-    st.session_state.logged_in_user = None
-
-if "logged_in_email" not in st.session_state:
-    st.session_state.logged_in_email = None
+# Oturum Yönetimi
+if "messages" not in st.session_state: st.session_state.messages = []
+if "recent_queries" not in st.session_state: st.session_state.recent_queries = []
+if "auth_mode" not in st.session_state: st.session_state.auth_mode = None
+if "logged_in_user" not in st.session_state: st.session_state.logged_in_user = None
+if "logged_in_email" not in st.session_state: st.session_state.logged_in_email = None
+if "guest_credits" not in st.session_state: st.session_state.guest_credits = 10
+if "astro_result" not in st.session_state: st.session_state.astro_result = ""
+if "tarot_result" not in st.session_state: st.session_state.tarot_result = ""
+if "kahve_result" not in st.session_state: st.session_state.kahve_result = ""
 
 if "system_prompt" not in st.session_state:
     st.session_state.system_prompt = (
         "Sen Lunara'sın. Profesyonel, empatik ve mistik bir astroloji ve fal danışmanısın. "
-        "Kullanıcılara her zaman akıcı, gramer açısından kusursuz, anlamlı ve edebi bir Türkçe ile yanıt ver. "
-        "Asla anlamsız, kopuk, rüya benzeri veya saçma cümleler kurma; her zaman mantıklı bir bütünlük içinde konuş."
+        "DİL KURALI: Cevaplarının TAMAMI YALNIZCA KUSURSUZ VE AKICI TÜRKÇE OLMALIDIR. "
+        "Asla İngilizce cümle veya düşünce süreci (<think>) yazma. Edebi bir bütünlük içinde konuş."
     )
 
-# Giriş, Üye Ol ve Gelişmiş Profil Modalları (Dialogs)
+MODEL_CREDIT_COSTS = {
+    "llama-3.1-8b-instant": 1,
+    "llama-3.3-70b-versatile": 2,
+    "gemma2-9b-it": 1,
+    "mixtral-8x7b-32768": 2
+}
+
+def deduct_credits(model_id):
+    required_cost = MODEL_CREDIT_COSTS.get(model_id, 1)
+    if st.session_state.logged_in_email:
+        u_email = st.session_state.logged_in_email
+        user_data = db_get_user(u_email)
+        if user_data:
+            current_credits = user_data.get("credits", 0)
+            if current_credits < required_cost:
+                st.error(f"⚠️ Yetersiz kredi! Bu işlem {required_cost} kredi gerektiriyor. Mevcut krediniz: {current_credits}.")
+                return False
+            user_data["credits"] -= required_cost
+            db_save_user(u_email, user_data)
+    else:
+        if st.session_state.guest_credits < required_cost:
+            st.error(f"⚠️ Yetersiz misafir kredisi! Bu işlem {required_cost} kredi gerektiriyor. Lütfen üye olun.")
+            return False
+        st.session_state.guest_credits -= required_cost
+    return True
+
+# Modallar
 @st.dialog("✨ Lunara.ai - Giriş Yap")
 def login_dialog():
-    st.write("Yıldızların rehberliğine tekrar hoş geldin.")
-    l_email = st.text_input("E-posta Adresi", key="l_email")
-    l_pass = st.text_input("Şifre", type="password", key="l_pass")
-    col_l1, col_l2 = st.columns(2)
-    with col_l1:
-        if st.button("Giriş Yap", use_container_width=True, key="submit_login"):
-            if l_email and l_pass:
-                if l_email in st.session_state.users and st.session_state.users[l_email]["password"] == l_pass:
-                    st.session_state.logged_in_email = l_email
-                    st.session_state.logged_in_user = st.session_state.users[l_email]["name"]
-                    st.success(f"Hoş geldin, {st.session_state.logged_in_user}! Yıldızlar seninle.")
-                    st.session_state.auth_mode = None
-                    st.rerun()
-                else:
-                    st.error("E-posta veya şifre hatalı!")
-            else:
-                st.warning("Lütfen tüm alanları doldurun.")
-    with col_l2:
-        if st.button("İptal", use_container_width=True, key="cancel_login"):
+    l_email = st.text_input("E-posta Adresi")
+    l_pass = st.text_input("Şifre", type="password")
+    col1, col2 = st.columns(2)
+    if col1.button("Giriş Yap", use_container_width=True):
+        user_data = db_get_user(l_email)
+        if user_data and user_data["password"] == l_pass:
+            st.session_state.logged_in_email = l_email
+            st.session_state.logged_in_user = user_data["name"]
+            st.session_state.messages = db_get_chat_history(l_email)
             st.session_state.auth_mode = None
             st.rerun()
+        else:
+            st.error("Hatalı e-posta veya şifre!")
+    if col2.button("İptal", use_container_width=True):
+        st.session_state.auth_mode = None
+        st.rerun()
 
 @st.dialog("✨ Lunara.ai - Üye Ol")
 def signup_dialog():
-    st.write("Mistik yolculuğa ilk adımını at ve ruhsal profilini oluştur.")
-    s_name = st.text_input("Ad Soyad", key="s_name")
-    s_email = st.text_input("E-posta Adresi", key="s_email")
-    s_pass = st.text_input("Şifre", type="password", key="s_pass")
-    col_s1, col_s2 = st.columns(2)
-    with col_s1:
-        if st.button("Kayıt Ol", use_container_width=True, key="submit_signup"):
-            if s_name and s_email and s_pass:
-                if s_email in st.session_state.users:
-                    st.warning("Bu e-posta adresi ile zaten bir hesap mevcut.")
-                else:
-                    st.session_state.users[s_email] = {
-                        "name": s_name, 
-                        "password": s_pass, 
-                        "email_notifications": True,
-                        "location": "",
-                        "birth_date": None,
-                        "birth_time": None,
-                        "bio": "",
-                        "saved_readings": []
-                    }
-                    st.session_state.logged_in_email = s_email
-                    st.session_state.logged_in_user = s_name
-                    st.success("Üyeliğiniz başarıyla oluşturuldu ve giriş yapıldı! Hoş geldin.")
-                    st.session_state.auth_mode = None
-                    st.rerun()
+    s_name = st.text_input("Ad Soyad")
+    s_email = st.text_input("E-posta Adresi")
+    s_pass = st.text_input("Şifre", type="password")
+    col1, col2 = st.columns(2)
+    if col1.button("Kayıt Ol", use_container_width=True):
+        if s_name and s_email and s_pass:
+            if db_get_user(s_email):
+                st.warning("Bu e-posta zaten kullanımda.")
             else:
-                st.warning("Lütfen tüm alanları doldurun.")
-    with col_s2:
-        if st.button("İptal", use_container_width=True, key="cancel_signup"):
-            st.session_state.auth_mode = None
-            st.rerun()
-
-@st.dialog("⚙️ Gelişmiş Profil ve Mistik Tercihler")
-def profile_dialog():
-    email = st.session_state.logged_in_email
-    if not email or email not in st.session_state.users:
-        st.warning("Oturum bilgisi bulunamadı.")
-        if st.button("Kapat", key="close_prof_err"):
-            st.session_state.auth_mode = None
-            st.rerun()
-        return
-
-    user_data = st.session_state.users[email]
-    st.write("Kişisel bilgilerinizi, şifrenizi, doğum haritası verilerinizi ve konumunuzu yönetin.")
-
-    new_name = st.text_input("Ad Soyad", value=user_data.get("name", ""), key="prof_name")
-    st.text_input("E-posta Adresi (Değiştirilemez)", value=email, disabled=True, key="prof_email")
-    new_pass = st.text_input("Yeni Şifre", type="password", value=user_data.get("password", ""), key="prof_pass")
-    
-    # Konum Ayarı (Otomatik ve Manüel Seçenek)
-    st.markdown("### 📍 Konum Ayarları")
-    loc_mode = st.radio("Konum Belirleme Yöntemi", ["Manüel Gir", "Otomatik Algıla (IP ile)"], horizontal=True, key="prof_loc_mode")
-    
-    current_loc_val = user_data.get("location", "")
-    if loc_mode == "Otomatik Algıla (IP ile)":
-        if st.button("🌍 Konumumu Otomatik Bul", key="auto_loc_btn"):
-            try:
-                url = "https://ipapi.co/json/"
-                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=3) as response:
-                    geo_data = json.loads(response.read().decode())
-                    city = geo_data.get('city', '')
-                    country = geo_data.get('country_name', '')
-                    current_loc_val = f"{city}, {country}".strip(", ")
-                    st.success(f"Konum başarıyla tespit edildi: {current_loc_val}")
-            except Exception:
-                st.error("Otomatik konum algılanamadı, lütfen manüel olarak giriniz.")
-                
-    new_location = st.text_input("Konum (Şehir / Ülke)", value=current_loc_val, key="prof_location_input", placeholder="Örn: İstanbul, Türkiye")
-
-    col_b1, col_b2 = st.columns(2)
-    with col_b1:
-        default_date = user_data.get("birth_date") or datetime.date(1995, 1, 1)
-        new_birth_date = st.date_input("Doğum Tarihi", value=default_date, min_value=datetime.date(1900, 1, 1), max_value=datetime.date.today(), key="prof_birth_date")
-    with col_b2:
-        default_time = user_data.get("birth_time") or datetime.time(12, 0)
-        new_birth_time = st.time_input("Doğum Saati", value=default_time, key="prof_birth_time")
-
-    new_bio = st.text_area("Ruhsal Biyografi / Notlar", value=user_data.get("bio", ""), placeholder="Yıldız haritanız veya ruhsal yolculuğunuz hakkındaki kişisel notlarınız...", key="prof_bio")
-
-    email_notif = st.checkbox(
-        "E-posta bildirimleri al (Günlük fal, özel tarot ve burç uyarıları)", 
-        value=user_data.get("email_notifications", True),
-        key="prof_notif"
-    )
-
-    col_p1, col_p2 = st.columns(2)
-    with col_p1:
-        if st.button("Değişiklikleri Kaydet", use_container_width=True, key="save_profile"):
-            st.session_state.users[email]["name"] = new_name
-            st.session_state.users[email]["password"] = new_pass
-            st.session_state.users[email]["location"] = new_location
-            st.session_state.users[email]["birth_date"] = new_birth_date
-            st.session_state.users[email]["birth_time"] = new_birth_time
-            st.session_state.users[email]["bio"] = new_bio
-            st.session_state.users[email]["email_notifications"] = email_notif
-            st.session_state.logged_in_user = new_name
-            st.success("Profil ve mistik ayarlarınız güncellendi!")
-            st.session_state.auth_mode = None
-            st.rerun()
-    with col_p2:
-        if st.button("İptal", use_container_width=True, key="cancel_profile"):
-            st.session_state.auth_mode = None
-            st.rerun()
-
-if st.session_state.auth_mode == "login":
-    login_dialog()
-elif st.session_state.auth_mode == "signup":
-    signup_dialog()
-elif st.session_state.auth_mode == "profile":
-    profile_dialog()
-
-# Yan Panel (Sol Üst Köşede Üye Ol / Giriş Yap Menüsü)
-with st.sidebar:
-    st.title("🌙 Lunara.ai")
-    st.caption("Astroloji & Kehanet Rehberi")
-
-    st.markdown("---")
-    
-    # Sol üst köşeye yerleştirilen Üye Ol / Giriş Yap menüsü
-    if st.session_state.logged_in_email:
-        u_record = st.session_state.users.get(st.session_state.logged_in_email, {})
-        st.markdown(f"✨ **{st.session_state.logged_in_user}**")
-        
-        b_date = u_record.get("birth_date")
-        if b_date:
-            zodiac = get_zodiac_sign(b_date)
-            st.caption(f"🌟 Burç: {zodiac}")
-        user_loc = u_record.get("location")
-        if user_loc:
-            st.caption(f"📍 {user_loc}")
-            
-        col_sb1, col_sb2 = st.columns(2)
-        with col_sb1:
-            if st.button("⚙️ Profil", key="sidebar_profile_btn", use_container_width=True):
-                st.session_state.auth_mode = "profile"
-                st.rerun()
-        with col_sb2:
-            if st.button("Çıkış", key="sidebar_logout_btn", use_container_width=True):
-                st.session_state.logged_in_email = None
-                st.session_state.logged_in_user = None
+                db_save_user(s_email, {"name": s_name, "password": s_pass, "credits": 20})
+                st.session_state.logged_in_email = s_email
+                st.session_state.logged_in_user = s_name
+                st.session_state.messages = []
                 st.session_state.auth_mode = None
                 st.rerun()
-    else:
-        col_sb1, col_sb2 = st.columns(2)
-        with col_sb1:
-            if st.button("Giriş Yap", key="sidebar_login_btn", use_container_width=True):
-                st.session_state.auth_mode = "login"
-                st.rerun()
-        with col_sb2:
-            if st.button("Üye Ol", key="sidebar_signup_btn", use_container_width=True):
-                st.session_state.auth_mode = "signup"
-                st.rerun()
+    if col2.button("İptal", use_container_width=True):
+        st.session_state.auth_mode = None
+        st.rerun()
 
-    st.markdown("---")
-    st.subheader("✨ Günün Mistik Enerjisi")
-    st.info("🃏 **Günün Kartı: Güneş** — Neşe, başarı ve netlik dolu bir enerji seni sarıyor.")
-
-    st.markdown("---")
-    st.subheader("🕒 Son Kullanılanlar")
+@st.dialog("⚙️ Gelişmiş Profil")
+def profile_dialog():
+    email = st.session_state.logged_in_email
+    user_data = db_get_user(email)
+    st.info(f"🪙 **Mevcut Kredi:** {user_data.get('credits', 0)}")
+    if st.button("✨ 50 Kredi Yükle"):
+        user_data["credits"] += 50
+        db_save_user(email, user_data)
+        st.rerun()
     
-    recent_selected_prompt = None
-    if not st.session_state.get("recent_queries"):
-        st.caption("Henüz geçmiş işlem bulunmuyor.")
+    new_name = st.text_input("Ad Soyad", value=user_data.get("name", ""))
+    new_pass = st.text_input("Şifre", type="password", value=user_data.get("password", ""))
+    new_loc = st.text_input("Konum", value=user_data.get("location", ""))
+    
+    col1, col2 = st.columns(2)
+    if col1.button("Kaydet", use_container_width=True):
+        user_data.update({"name": new_name, "password": new_pass, "location": new_loc})
+        db_save_user(email, user_data)
+        st.session_state.logged_in_user = new_name
+        st.session_state.auth_mode = None
+        st.rerun()
+    if col2.button("İptal", use_container_width=True):
+        st.session_state.auth_mode = None
+        st.rerun()
+
+if st.session_state.auth_mode == "login": login_dialog()
+elif st.session_state.auth_mode == "signup": signup_dialog()
+elif st.session_state.auth_mode == "profile": profile_dialog()
+
+# Yan Panel
+with st.sidebar:
+    st.title("🌙 Lunara.ai")
+    st.markdown("---")
+    
+    if st.session_state.logged_in_email:
+        u_record = db_get_user(st.session_state.logged_in_email)
+        st.markdown(f"✨ **{st.session_state.logged_in_user}**")
+        st.caption(f"🪙 Kredi Bakiyesi: **{u_record.get('credits', 0)}**")
+        
+        col1, col2 = st.columns(2)
+        if col1.button("⚙️ Profil", use_container_width=True):
+            st.session_state.auth_mode = "profile"
+            st.rerun()
+        if col2.button("Çıkış", use_container_width=True):
+            st.session_state.logged_in_email = None
+            st.session_state.logged_in_user = None
+            st.session_state.messages = []
+            st.rerun()
     else:
-        for idx, q in enumerate(reversed(st.session_state.recent_queries[-5:])):
-            short_q = (q[:22] + "...") if len(q) > 22 else q
-            if st.button(f"🔹 {short_q}", key=f"recent_btn_{idx}", use_container_width=True):
-                recent_selected_prompt = q
+        st.caption(f"🪙 Misafir Kredisi: **{st.session_state.guest_credits}**")
+        col1, col2 = st.columns(2)
+        if col1.button("Giriş Yap", use_container_width=True):
+            st.session_state.auth_mode = "login"
+            st.rerun()
+        if col2.button("Üye Ol", use_container_width=True):
+            st.session_state.auth_mode = "signup"
+            st.rerun()
 
     st.markdown("---")
-    if st.session_state.messages:
-        chat_export_data = json.dumps(st.session_state.messages, ensure_ascii=False, indent=2)
-        st.download_button(
-            label="📥 Sohbet Geçmişini İndir",
-            data=chat_export_data,
-            file_name="lunara_sohbet_gecmisi.json",
-            mime="application/json",
-            use_container_width=True
-        )
-
     if st.button("🗑️ Sohbet Geçmişini Temizle", use_container_width=True):
+        if st.session_state.logged_in_email:
+            db_clear_chat_history(st.session_state.logged_in_email)
         st.session_state.messages = []
-        st.session_state.recent_queries = []
         st.rerun()
 
-    st.markdown("---")
-    st.markdown(
-        "<div style='text-align: center; color: #888888; font-size: 0.85em;'>"
-        "✨ Tasarım & Geliştirme<br><b>Yoldaş Işık</b> tarafından işlendi 🌙"
-        "</div>", 
-        unsafe_allow_html=True
-    )
+def process_chat_request(prompt_text, model_id=None):
+    if not deduct_credits(model_id or "default"):
+        return False
 
-# Sidebar'daki "Son Kullanılanlar" butonuna basıldığında tetiklenecek mekanizma
-if recent_selected_prompt:
-    st.session_state.messages.append({"role": "user", "content": recent_selected_prompt})
-    with st.spinner("Yıldızlar ve semboller okunuyor..."):
-        prompt_messages = [{"role": "system", "content": st.session_state.get("system_prompt", "Sen Lunara'sın.")}]
-        for m in st.session_state.messages[:-1]:
-            prompt_messages.append({"role": m["role"], "content": m["content"]})
-        prompt_messages.append({"role": "user", "content": recent_selected_prompt})
+    st.session_state.messages.append({"role": "user", "content": prompt_text})
+    if st.session_state.logged_in_email:
+        db_save_chat_message(st.session_state.logged_in_email, "user", prompt_text)
+    
+    with st.spinner("Yıldızlar okunuyor..."):
+        prompt_messages = [{"role": "system", "content": st.session_state.get("system_prompt")}]
+        history = st.session_state.messages[-10:] if len(st.session_state.messages) > 10 else st.session_state.messages
+        for m in history[:-1]: prompt_messages.append({"role": m["role"], "content": m["content"]})
+        prompt_messages.append({"role": "user", "content": prompt_text})
 
-        response = generate_completion(prompt_messages, model_name="llama-3.3-70b-versatile")
+        response = generate_completion(prompt_messages, model_name=model_id)
+        
         st.session_state.messages.append({"role": "assistant", "content": response})
-    st.rerun()
+        if st.session_state.logged_in_email:
+            db_save_chat_message(st.session_state.logged_in_email, "assistant", response)
+    return True
 
-# Ana Başlık Alanı
 st.title("🌙 Lunara.ai | Mistik Rehber")
-st.write("Kişiselleştirilmiş Yapay Zeka Fal, Tarot ve Astroloji Danışmanı")
 
-api_key = get_groq_api_key()
-if not api_key:
-    st.warning("⚠️ Groq API anahtarı bulunamadı. Lütfen `.streamlit/secrets.toml` dosyanızı kontrol edin.")
+tab1, tab2, tab3, tab4 = st.tabs(["💬 Mistik Sohbet", "🪐 Doğum Haritası Analizi", "🃏 3 Kart Tarot", "☕ Kahve Falı"])
 
-tab1, tab2, tab3, tab4 = st.tabs([
-    "💬 Mistik Sohbet", 
-    "🪐 Doğum Haritası Analizi", 
-    "🃏 3 Kart Tarot Açılımı", 
-    "☕ Kahve Falı & Rüyalar"
-])
-
-# Sekme 1: Mistik Sohbet
 with tab1:
-    st.markdown("### ✨ Hızlı Mistik Sorular")
-    col_h1, col_h2, col_h3, col_h4 = st.columns(4)
+    st.markdown("### ✨ Hızlı Sorular")
+    c1, c2, c3, c4 = st.columns(4)
+    q_prompt = None
+    if c1.button("☕ Günlük Fal Yorumu", use_container_width=True): q_prompt = "Bugün için günlük falımı yorumlar mısın?"
+    if c2.button("💖 Aşk & Uyum", use_container_width=True): q_prompt = "Aşk hayatımla ilgili mesajı yorumlar mısın?"
+    if c3.button("💼 Kariyer & Gelecek", use_container_width=True): q_prompt = "Kariyerimle ilgili yıldızların mesajı nedir?"
+    if c4.button("🃏 Tarot Çek", use_container_width=True): q_prompt = "Benim için bir tarot kartı çek ve yorumla."
 
-    quick_prompt_to_send = None
-    if col_h1.button("☕ Günlük Fal Yorumu", use_container_width=True):
-        quick_prompt_to_send = "Bugün için genel falımı ve yıldızların bana mesajını yorumlar mısın?"
-    if col_h2.button("💖 Aşk & Uyum", use_container_width=True):
-        quick_prompt_to_send = "Aşk hayatımla ilgili evrenin bana vermek istediği mesaj nedir?"
-    if col_h3.button("💼 Kariyer & Gelecek", use_container_width=True):
-        quick_prompt_to_send = "Kariyerim ve maddi geleceğim konusunda yıldızlar ne söylüyor?"
-    if col_h4.button("🃏 Tarot & Kader", use_container_width=True):
-        quick_prompt_to_send = "Geleceğime ışık tutacak bir kart çekerek bana rehberlik eder misin?"
-
-    if quick_prompt_to_send:
-        if quick_prompt_to_send not in st.session_state.recent_queries:
-            st.session_state.recent_queries.append(quick_prompt_to_send)
-            if len(st.session_state.recent_queries) > 10:
-                st.session_state.recent_queries.pop(0)
-
-        st.session_state.messages.append({"role": "user", "content": quick_prompt_to_send})
-        with st.spinner("Yıldızlar ve semboller okunuyor..."):
-            prompt_messages = [{"role": "system", "content": st.session_state.get("system_prompt", "Sen Lunara'sın.")}]
-            for m in st.session_state.messages[:-1]:
-                prompt_messages.append({"role": m["role"], "content": m["content"]})
-            prompt_messages.append({"role": "user", "content": quick_prompt_to_send})
-
-            response = generate_completion(prompt_messages, model_name="llama-3.3-70b-versatile")
-            st.session_state.messages.append({"role": "assistant", "content": response})
-        st.rerun()
-
-    st.warning("🤖 Hoş geldin. Ben Lunara. Yıldızların fısıltıları, kartların gizemi ve evrenin sırlarıyla sana rehberlik etmek için buradayım.")
+    if q_prompt:
+        if process_chat_request(q_prompt): st.rerun()
 
     for idx, msg in enumerate(st.session_state.messages):
-        avatar_icon = "👤" if msg["role"] == "user" else "🌙"
-        with st.chat_message(msg["role"], avatar=avatar_icon):
+        with st.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "🌙"):
             st.write(msg["content"])
-            if msg["role"] == "assistant" and st.session_state.logged_in_email:
-                if st.button("⭐ Favorilere Ekle", key=f"fav_msg_{idx}"):
-                    user_email = st.session_state.logged_in_email
-                    if "saved_readings" not in st.session_state.users[user_email]:
-                        st.session_state.users[user_email]["saved_readings"] = []
-                    if msg["content"] not in st.session_state.users[user_email]["saved_readings"]:
-                        st.session_state.users[user_email]["saved_readings"].append(msg["content"])
-                        st.success("Kehanet favorilerinize eklendi!")
-                    else:
-                        st.info("Bu kehanet zaten favorilerinizde kayıtlı.")
 
-# Sekme 2: Doğum Haritası Analizi
 with tab2:
     st.subheader("🪐 Doğum Haritası Potansiyel Analizi")
     
@@ -452,138 +428,88 @@ with tab2:
     default_saat = datetime.time(12, 0)
     default_sehir = ""
 
-    if st.session_state.logged_in_email and st.session_state.logged_in_email in st.session_state.users:
-        u_data = st.session_state.users[st.session_state.logged_in_email]
-        default_ad = u_data.get("name", "")
-        default_sehir = u_data.get("location", "")
-        if u_data.get("birth_date"):
-            default_tarih = u_data.get("birth_date")
-        if u_data.get("birth_time"):
-            default_saat = u_data.get("birth_time")
+    if st.session_state.logged_in_email:
+        u_data = db_get_user(st.session_state.logged_in_email)
+        if u_data:
+            default_ad = u_data.get("name", "")
+            default_sehir = u_data.get("location", "")
+            if u_data.get("birth_date"):
+                default_tarih = u_data.get("birth_date")
+            if u_data.get("birth_time"):
+                default_saat = u_data.get("birth_time")
 
     with st.form("astro_form"):
         ad = st.text_input("Adınız ve Soyadınız", value=default_ad)
-        tarih = st.date_input(
-            "Doğum Tarihiniz", 
-            value=default_tarih,
-            min_value=datetime.date(1900, 1, 1), 
-            max_value=datetime.date.today()
-        )
-        saat = st.time_input("Doğum Saatiniz (Tahmini)", value=default_saat)
+        tarih = st.date_input("Doğum Tarihiniz", value=default_tarih, min_value=datetime.date(1900, 1, 1), max_value=datetime.date.today())
+        saat = st.time_input("Doğum Saatiniz", value=default_saat)
         sehir = st.text_input("Doğum Yeri (İl/Ülke)", value=default_sehir)
         submit = st.form_submit_button("🪐 Haritayı Analiz Et")
 
-    if submit and ad and sehir:
-        with st.spinner("Gezegen konumları hesaplanıyor ve yıldızlar okunuyor..."):
-            prompt = (
-                f"Kullanıcı Bilgileri:\n"
-                f"- İsim: {ad}\n"
-                f"- Doğum Tarihi: {tarih}\n"
-                f"- Doğum Saati: {saat}\n"
-                f"- Doğum Yeri: {sehir}\n\n"
-                "Bu bilgilere dayanarak profesyonel bir astrolog ve mistik rehber gibi akıcı, kusursuz ve edebi bir Türkçe ile şu başlıklar altında detaylı bir analiz sun:\n"
-                "1. **Güneş Burcu ve Öz Kimlik:** (Kişinin temel karakterini, yaşam enerjisini ve potansiyelini açıkla)\n"
-                "2. **Yükselen Burcu ve Dış Dünya:** (Verilen saate göre dışarıdan nasıl algılandığını ve maskesini açıkla)\n"
-                "3. **Ay Burcu ve İç Dünya:** (Duygusal dünyasını, iç sığınağını ve bilinçaltı dinamiklerini açıkla)\n"
-                "4. **Ruhsal Yolculuk ve Önemli Tavsiyeler:** (Kişinin bu hayattaki kadersel yönelimini mistik bir dille özetle)\n\n"
-                "Asla anlamsız kelime tekrarları yapma, yapılandırılmış ve akıcı paragraflar kullan."
-            )
-            temp_messages = [
-                {"role": "system", "content": "Sen dünyanın en iyi, en akıcı ve edebi dili kullanan uzman bir astrolog ve mistik rehberisin. Kesinlikle kelime tekrarı yapmazsın."},
-                {"role": "user", "content": prompt}
-            ]
-            result = generate_completion(temp_messages, model_name="llama-3.3-70b-versatile")
-            st.markdown("---")
-            st.markdown(result)
-
-# Sekme 3: 3 Kart Tarot Açılımı
-with tab3:
-    st.subheader("🃏 3 Kart Tarot Açılımı (Geçmiş - Şimdi - Gelecek)")
-    niyet = st.text_input("Odaklanmak istediğiniz konu veya niyetiniz:", placeholder="Örn: Kariyerimdeki değişiklikler...")
-    
-    if st.button("🃏 Kartları Çek ve Yorumla"):
-        with st.spinner("Kartlar karıştırılıyor ve çekiliyor..."):
-            prompt = (
-                f"Kullanıcının Niyeti/Sorusu: '{niyet if niyet else 'Genel Hayat Akışı'}'. "
-                "Rastgele 3 Tarot kartı seç (Geçmiş, Şimdi ve Gelecek pozisyonları için). "
-                "Her kartın adını, düz/ters durumunu ve bu 3 kartın birbiriyle olan mistik bağını niyet doğrultusunda detaylıca yorumla."
-            )
-            temp_messages = [
-                {"role": "system", "content": "Sen sezgileri güçlü profesyonel bir Tarot okuyucususun."},
-                {"role": "user", "content": prompt}
-            ]
-            tarot_result = generate_completion(temp_messages, model_name="llama-3.3-70b-versatile")
-            st.markdown("---")
-            st.markdown(tarot_result)
-
-# Sekme 4: Kahve Falı ve Rüyalar
-with tab4:
-    st.subheader("☕ Kahve Falı & Rüya Tabiri")
-    metin = st.text_area("Fincanınızdaki sembolleri veya gördüğünüz rüyayı anlatın:", height=150)
-    
-    if st.button("☕ Mistik Sembol Analizi Yap"):
-        if metin:
-            with st.spinner("Semboller çözümleniyor..."):
-                prompt = (
-                    f"Kullanıcı Metni: '{metin}'. "
-                    "Bu metindeki sembolleri, objeleri ve hisleri hem mistik geleneğe hem de bilincin derinliklerine dayanarak "
-                    "detaylı, anlamlı ve yol gösterici bir biçimde yorumla."
-                )
-                temp_messages = [
-                    {"role": "system", "content": "Sen sembol bilimi ve mistik rüya/fincan yorumlama konusunda uzman bir rehbersin."},
-                    {"role": "user", "content": prompt}
-                ]
-                symbol_result = generate_completion(temp_messages, model_name="llama-3.3-70b-versatile")
-                st.markdown("---")
-                st.markdown(symbol_result)
+    if submit:
+        if not ad or not sehir:
+            st.warning("⚠️ Lütfen adınızı ve doğum yerini eksiksiz doldurun.")
         else:
-            st.warning("Lütfen analiz edilecek bir metin yazın.")
+            if deduct_credits("default"):
+                with st.spinner("Gezegen konumları ve doğum haritası hesaplanıyor..."):
+                    prompt = (
+                        f"Kullanıcı Bilgileri:\n"
+                        f"- İsim: {ad}\n"
+                        f"- Doğum Tarihi: {tarih}\n"
+                        f"- Doğum Saati: {saat}\n"
+                        f"- Doğum Yeri: {sehir}\n\n"
+                        "Bu bilgilere dayanarak profesyonel bir astrolog gibi TAMAMEN TÜRKÇE, akıcı ve edebi bir dille şu başlıklar altında detaylı bir analiz sun:\n"
+                        "1. **Güneş Burcu ve Öz Kimlik:**\n"
+                        "2. **Yükselen Burcu ve Dış Dünya:**\n"
+                        "3. **Ay Burcu ve İç Dünya:**\n"
+                        "4. **Ruhsal Yolculuk ve Önemli Tavsiyeler:**"
+                    )
+                    res = generate_completion([{"role": "user", "content": prompt}])
+                    if res:
+                        st.session_state.astro_result = res
+                    else:
+                        st.session_state.astro_result = "Yıldızlardan şu an yanıt alınamadı, lütfen tekrar deneyin."
 
-# Alt Kısma Sabitlenmiş Global Giriş Çubuğu (Model Seçim Menüsü Eski Konumunda / Alt Bar İçinde)
+    if st.session_state.get("astro_result"):
+        st.markdown("---")
+        st.markdown(st.session_state.astro_result)
+
+with tab3:
+    niyet = st.text_input("Niyetiniz:")
+    if st.button("Kartları Çek"):
+        if deduct_credits("default"):
+            with st.spinner("Karıştırılıyor..."):
+                res = generate_completion([{"role": "user", "content": f"{niyet} niyetine 3 tarot kartı çek ve yorumla."}])
+                st.session_state.tarot_result = res
+                st.rerun()
+    if st.session_state.tarot_result: st.write(st.session_state.tarot_result)
+
+with tab4:
+    metin = st.text_area("Sembolleri anlatın:")
+    if st.button("Analiz Yap"):
+        if metin and deduct_credits("default"):
+            with st.spinner("Çözümleniyor..."):
+                res = generate_completion([{"role": "user", "content": f"{metin} sembollerini yorumla."}])
+                st.session_state.kahve_result = res
+                st.rerun()
+    if st.session_state.kahve_result: st.write(st.session_state.kahve_result)
+
+# Dinamik model listesi oluştur
+available_models = get_groq_models_list()
+if not available_models:
+    available_models = ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "gemma2-9b-it", "mixtral-8x7b-32768"]
+
 with st.container():
     with st.form(key="global_chat_bar_form", clear_on_submit=True):
-        b_col1, b_col2, b_col3 = st.columns([1.2, 7.8, 1.0])
-
-        with b_col1:
-            bar_model_choice = st.selectbox(
+        b1, b2, b3 = st.columns([2.0, 7.0, 1.0])
+        with b1:
+            active_model = st.selectbox(
                 "Model",
-                options=["Pro (70B)", "Flash (8B)", "Beta"],
+                options=available_models,
                 label_visibility="collapsed"
             )
-            bar_model_map = {
-                "Pro (70B)": "llama-3.3-70b-versatile",
-                "Flash (8B)": "llama-3.1-8b-instant",
-                "Beta": "llama-3.2-90b-vision-preview"
-            }
-            current_active_model = bar_model_map[bar_model_choice]
-
-        with b_col2:
-            user_text = st.text_input("Mesaj", placeholder="Fal, tarot veya burçlar hakkında bir şey yazın...", label_visibility="collapsed")
-
-        with b_col3:
-            submitted = st.form_submit_button("➤", help="Gönder")
+        with b2: user_text = st.text_input("Mesaj", label_visibility="collapsed", placeholder="Fal, tarot veya burçlar hakkında bir şey sor...")
+        with b3: submitted = st.form_submit_button("➤")
 
 if submitted and user_text:
-    final_prompt = user_text
-    if final_prompt not in st.session_state.recent_queries:
-        st.session_state.recent_queries.append(final_prompt)
-        if len(st.session_state.recent_queries) > 10:
-            st.session_state.recent_queries.pop(0)
-
-    message_payload = {"role": "user", "content": final_prompt}
-    st.session_state.messages.append(message_payload)
-
-    with st.chat_message("user", avatar="👤"):
-        st.write(final_prompt)
-
-    with st.chat_message("assistant", avatar="🌙"):
-        with st.spinner("Yıldızlar ve semboller okunuyor..."):
-            prompt_messages = [{"role": "system", "content": st.session_state.get("system_prompt", "Sen Lunara'sın.")}]
-            for m in st.session_state.messages[:-1]:
-                prompt_messages.append({"role": m["role"], "content": m["content"]})
-            prompt_messages.append({"role": "user", "content": final_prompt})
-
-            response = generate_completion(prompt_messages, model_name=current_active_model)
-            st.write(response)
-            st.session_state.messages.append({"role": "assistant", "content": response})
-    st.rerun()
+    if process_chat_request(user_text, active_model):
+        st.rerun()
