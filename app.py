@@ -154,7 +154,7 @@ st.markdown("""
         flex: 1 1 0% !important;
         min-width: 0px !important;
     }
-    form:has(input[placeholder*="Fal, tarot veya burçlar"]) {
+    div[data-testid="stForm"]:has(input[placeholder*="Fal, tarot veya burçlar"]) {
         position: fixed !important;
         bottom: 0 !important;
         left: 0 !important;
@@ -166,6 +166,15 @@ st.markdown("""
         border-top: 1px solid rgba(255, 255, 255, 0.1) !important;
         width: 100% !important;
         box-sizing: border-box !important;
+        margin: 0 !important;
+    }
+    /* Model seçme sütununu küçült */
+    div[data-testid="stForm"]:has(input[placeholder*="Fal, tarot veya burçlar"]) [data-testid="stHorizontalBlock"] > div[data-testid="column"]:first-child {
+        flex: 0 0 150px !important;
+        max-width: 150px !important;
+    }
+    div[data-testid="stForm"]:has(input[placeholder*="Fal, tarot veya burçlar"]) [data-testid="stHorizontalBlock"] > div[data-testid="column"]:first-child [data-baseweb="select"] {
+        font-size: 0.82rem !important;
     }
     .main .block-container {
         padding-bottom: 140px !important;
@@ -604,7 +613,7 @@ with tab4:
 # Alt Sohbet Çubuğu
 with st.container():
     with st.form(key="global_chat_bar_form", clear_on_submit=True):
-        b1, b2, b3 = st.columns([2.5, 6.5, 1.0])
+        b1, b2, b3 = st.columns([1.5, 7.5, 1.0])
         with b1:
             selected_label = st.selectbox(
                 "Model",
