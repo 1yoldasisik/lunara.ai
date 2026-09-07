@@ -150,6 +150,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# EN UYGUN 3 MODEL TANIMI VE ETİKETLERİ
+MODEL_OPTIONS = {
+    "🧠 Gelişmiş (Llama 3.3 70B)": "llama-3.3-70b-versatile",
+    "⚡ Hızlı (Llama 3.1 8B)": "llama-3.1-8b-instant",
+    "🔮 Dengeli (Mixtral 8x7B)": "mixtral-8x7b-32768"
+}
+
 def get_groq_api_key():
     try:
         key = st.secrets.get("GROQ_API_KEY")
@@ -167,7 +174,7 @@ def get_groq_client():
 
 @st.cache_data(ttl=300)
 def get_groq_models_list():
-    """Groq API'den hesabınızda aktif olan modelleri dinamik çeker."""
+    """Groq API'den aktif tüm modelleri sorgular."""
     client = get_groq_client()
     if not client:
         return []
@@ -182,35 +189,35 @@ def get_groq_models_list():
     except Exception:
         return []
 
-def generate_completion(messages, model_name=None):
+def generate_completion(messages, preferred_model=None):
     client = get_groq_client()
     if client is None:
         return "Groq API anahtarı bulunamadı. Lütfen st.secrets veya ortam değişkenlerini kontrol edin."
 
-    active_models = get_groq_models_list()
-    
+    # 1. Denenecek modeller sırasını oluştur (Önce seçilen model, sonra alternatifler)
     candidate_models = []
-    if model_name:
-        candidate_models.append(model_name)
-    candidate_models.extend(active_models)
+    if preferred_model:
+        candidate_models.append(preferred_model)
     
-    # Standart yedek listesi
-    fallback_models = [
-        "llama-3.1-8b-instant",
-        "llama-3.3-70b-versatile",
-        "gemma2-9b-it",
-        "mixtral-8x7b-32768",
-        "llama3-8b-8192"
-    ]
+    # 3 Ana model yedeği
+    candidate_models.extend(list(MODEL_OPTIONS.values()))
+    
+    # Hesaptaki diğer dinamik modeller
+    active_models = get_groq_models_list()
+    candidate_models.extend(active_models)
+
+    # Genel yedekler
+    fallback_models = ["gemma2-9b-it", "llama3-8b-8192"]
     candidate_models.extend(fallback_models)
 
-    # Yinelenenleri sıralamayı bozmadan temizle
+    # Yinelenen modelleri sırasını koruyarak temizle
     models_to_try = []
     for m in candidate_models:
         if m and m not in models_to_try:
             models_to_try.append(m)
 
     last_error = ""
+    # Arka planda çalışan ilk modeli bulana kadar otomatik dene
     for current_model in models_to_try:
         try:
             response = client.chat.completions.create(
@@ -225,9 +232,10 @@ def generate_completion(messages, model_name=None):
                 return clean_content
         except Exception as e:
             last_error = str(e)
+            # Seçilen model çalışmazsa sessizce sonraki yedek modele geç
             continue
             
-    return f"Yıldızlardan şu an yanıt alınamadı. (Groq API Hata Detayı: {last_error})"
+    return f"Yıldızlardan şu an yanıt alınamadı. (Detay: {last_error})"
 
 # Oturum Yönetimi
 if "messages" not in st.session_state: st.session_state.messages = []
@@ -250,8 +258,8 @@ if "system_prompt" not in st.session_state:
 MODEL_CREDIT_COSTS = {
     "llama-3.1-8b-instant": 1,
     "llama-3.3-70b-versatile": 2,
-    "gemma2-9b-it": 1,
-    "mixtral-8x7b-32768": 2
+    "mixtral-8x7b-32768": 2,
+    "gemma2-9b-it": 1
 }
 
 def deduct_credits(model_id):
@@ -380,7 +388,7 @@ with st.sidebar:
         st.rerun()
 
 def process_chat_request(prompt_text, model_id=None):
-    if not deduct_credits(model_id or "default"):
+    if not deduct_credits(model_id or "llama-3.3-70b-versatile"):
         return False
 
     st.session_state.messages.append({"role": "user", "content": prompt_text})
@@ -393,7 +401,7 @@ def process_chat_request(prompt_text, model_id=None):
         for m in history[:-1]: prompt_messages.append({"role": m["role"], "content": m["content"]})
         prompt_messages.append({"role": "user", "content": prompt_text})
 
-        response = generate_completion(prompt_messages, model_name=model_id)
+        response = generate_completion(prompt_messages, preferred_model=model_id)
         
         st.session_state.messages.append({"role": "assistant", "content": response})
         if st.session_state.logged_in_email:
@@ -440,35 +448,57 @@ with tab2:
 
     with st.form("astro_form"):
         ad = st.text_input("Adınız ve Soyadınız", value=default_ad)
-        tarih = st.date_input("Doğum Tarihiniz", value=default_tarih, min_value=datetime.date(1900, 1, 1), max_value=datetime.date.today())
+        
+        # --- DÜZELTİLEN TARİH SEÇİM ALANI ---
+        st.write("**Doğum Tarihiniz:**")
+        col_d, col_m, col_y = st.columns(3)
+        with col_d:
+            sel_day = st.selectbox("Gün", list(range(1, 32)), index=default_tarih.day - 1)
+        with col_m:
+            sel_month = st.selectbox("Ay", list(range(1, 13)), index=default_tarih.month - 1)
+        with col_y:
+            current_year = datetime.date.today().year
+            years_list = list(range(current_year, 1919, -1))
+            default_year_idx = years_list.index(default_tarih.year) if default_tarih.year in years_list else 0
+            sel_year = st.selectbox("Yıl", years_list, index=default_year_idx)
+        # ------------------------------------
+            
         saat = st.time_input("Doğum Saatiniz", value=default_saat)
         sehir = st.text_input("Doğum Yeri (İl/Ülke)", value=default_sehir)
         submit = st.form_submit_button("🪐 Haritayı Analiz Et")
 
     if submit:
-        if not ad or not sehir:
-            st.warning("⚠️ Lütfen adınızı ve doğum yerini eksiksiz doldurun.")
-        else:
-            if deduct_credits("default"):
-                with st.spinner("Gezegen konumları ve doğum haritası hesaplanıyor..."):
-                    prompt = (
-                        f"Kullanıcı Bilgileri:\n"
-                        f"- İsim: {ad}\n"
-                        f"- Doğum Tarihi: {tarih}\n"
-                        f"- Doğum Saati: {saat}\n"
-                        f"- Doğum Yeri: {sehir}\n\n"
-                        "Bu bilgilere dayanarak profesyonel bir astrolog gibi TAMAMEN TÜRKÇE, akıcı ve edebi bir dille şu başlıklar altında detaylı bir analiz sun:\n"
-                        "1. **Güneş Burcu ve Öz Kimlik:**\n"
-                        "2. **Yükselen Burcu ve Dış Dünya:**\n"
-                        "3. **Ay Burcu ve İç Dünya:**\n"
-                        "4. **Ruhsal Yolculuk ve Önemli Tavsiyeler:**"
-                    )
-                    res = generate_completion([{"role": "user", "content": prompt}])
-                    if res:
-                        st.session_state.astro_result = res
-                    else:
-                        st.session_state.astro_result = "Yıldızlardan şu an yanıt alınamadı, lütfen tekrar deneyin."
+        # --- TARİH GEÇERLİLİK KONTROLÜ ---
+        try:
+            tarih = datetime.date(sel_year, sel_month, sel_day)
+            valid_date = True
+        except ValueError:
+            st.error("⚠️ Seçtiğiniz tarih geçersiz (Örn: Şubat ayında 30-31. gün seçimi). Lütfen tarihi kontrol edin.")
+            valid_date = False
 
+        if valid_date:
+            if not ad or not sehir:
+                st.warning("⚠️ Lütfen adınızı ve doğum yerini eksiksiz doldurun.")
+            else:
+                if deduct_credits("llama-3.3-70b-versatile"):
+                    with st.spinner("Gezegen konumları ve doğum haritası hesaplanıyor..."):
+                        prompt = (
+                            f"Kullanıcı Bilgileri:\n"
+                            f"- İsim: {ad}\n"
+                            f"- Doğum Tarihi: {tarih}\n"
+                            f"- Doğum Saati: {saat}\n"
+                            f"- Doğum Yeri: {sehir}\n\n"
+                            "Bu bilgilere dayanarak profesyonel bir astrolog gibi TAMAMEN TÜRKÇE, akıcı ve edebi bir dille şu başlıklar altında detaylı bir analiz sun:\n"
+                            "1. **Güneş Burcu ve Öz Kimlik:**\n"
+                            "2. **Yükselen Burcu ve Dış Dünya:**\n"
+                            "3. **Ay Burcu ve İç Dünya:**\n"
+                            "4. **Ruhsal Yolculuk ve Önemli Tavsiyeler:**"
+                        )
+                        res = generate_completion([{"role": "user", "content": prompt}], preferred_model="llama-3.3-70b-versatile")
+                        if res:
+                            st.session_state.astro_result = res
+                        else:
+                            st.session_state.astro_result = "Yıldızlardan şu an yanıt alınamadı, lütfen tekrar deneyin."
     if st.session_state.get("astro_result"):
         st.markdown("---")
         st.markdown(st.session_state.astro_result)
@@ -476,9 +506,9 @@ with tab2:
 with tab3:
     niyet = st.text_input("Niyetiniz:")
     if st.button("Kartları Çek"):
-        if deduct_credits("default"):
+        if deduct_credits("llama-3.3-70b-versatile"):
             with st.spinner("Karıştırılıyor..."):
-                res = generate_completion([{"role": "user", "content": f"{niyet} niyetine 3 tarot kartı çek ve yorumla."}])
+                res = generate_completion([{"role": "user", "content": f"{niyet} niyetine 3 tarot kartı çek ve yorumla."}], preferred_model="llama-3.3-70b-versatile")
                 st.session_state.tarot_result = res
                 st.rerun()
     if st.session_state.tarot_result: st.write(st.session_state.tarot_result)
@@ -486,30 +516,27 @@ with tab3:
 with tab4:
     metin = st.text_area("Sembolleri anlatın:")
     if st.button("Analiz Yap"):
-        if metin and deduct_credits("default"):
+        if metin and deduct_credits("llama-3.3-70b-versatile"):
             with st.spinner("Çözümleniyor..."):
-                res = generate_completion([{"role": "user", "content": f"{metin} sembollerini yorumla."}])
+                res = generate_completion([{"role": "user", "content": f"{metin} sembollerini yorumla."}], preferred_model="llama-3.3-70b-versatile")
                 st.session_state.kahve_result = res
                 st.rerun()
     if st.session_state.kahve_result: st.write(st.session_state.kahve_result)
 
-# Dinamik model listesi oluştur
-available_models = get_groq_models_list()
-if not available_models:
-    available_models = ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "gemma2-9b-it", "mixtral-8x7b-32768"]
-
+# Alt Sohbet Çubuğu
 with st.container():
     with st.form(key="global_chat_bar_form", clear_on_submit=True):
-        b1, b2, b3 = st.columns([2.0, 7.0, 1.0])
+        b1, b2, b3 = st.columns([2.5, 6.5, 1.0])
         with b1:
-            active_model = st.selectbox(
+            selected_label = st.selectbox(
                 "Model",
-                options=available_models,
+                options=list(MODEL_OPTIONS.keys()),
                 label_visibility="collapsed"
             )
+            active_model_id = MODEL_OPTIONS[selected_label]
         with b2: user_text = st.text_input("Mesaj", label_visibility="collapsed", placeholder="Fal, tarot veya burçlar hakkında bir şey sor...")
         with b3: submitted = st.form_submit_button("➤")
 
 if submitted and user_text:
-    if process_chat_request(user_text, active_model):
+    if process_chat_request(user_text, active_model_id):
         st.rerun()
