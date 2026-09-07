@@ -6,6 +6,7 @@ import sqlite3
 import hashlib
 import urllib.request
 import streamlit as st
+import pandas as pd
 from groq import Groq
 
 # Türkiye Şehir Listesi
@@ -25,6 +26,16 @@ TURKEY_CITIES = [
 # SQLite Veritabanı Yapılandırması
 DB_FILE = "lunara.db"
 
+def hash_password(password: str) -> str:
+    """Şifreyi SHA-256 algoritması ile hash'ler."""
+    return hashlib.sha256(password.encode('utf-8')).hexdigest()
+
+def verify_password(stored_password: str, provided_password: str) -> bool:
+    """Hash'lenmiş veya eski açık metin şifreleri doğrular."""
+    if len(stored_password) == 64 and all(c in '0123456789abcdefABCDEF' for c in stored_password):
+        return stored_password == hash_password(provided_password)
+    return stored_password == provided_password
+
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -39,9 +50,17 @@ def init_db():
             bio TEXT,
             email_notifications INTEGER,
             credits INTEGER,
-            saved_readings TEXT
+            saved_readings TEXT,
+            is_admin INTEGER DEFAULT 0
         )
     ''')
+    
+    # Mevcut veritabanı şemasına is_admin sütunu dinamik ekleme kontrolü
+    cursor.execute("PRAGMA table_info(users)")
+    columns = [column[1] for column in cursor.fetchall()]
+    if 'is_admin' not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS chat_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,6 +70,16 @@ def init_db():
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    
+    # Varsayılan Admin Hesabı Oluşturma (Yoksa)
+    admin_email = "admin@lunara.ai"
+    cursor.execute("SELECT email FROM users WHERE email = ?", (admin_email,))
+    if not cursor.fetchone():
+        cursor.execute('''
+            INSERT INTO users (email, name, password, credits, is_admin)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (admin_email, "Sistem Yöneticisi", hash_password("Admin123!"), 999999, 1))
+
     conn.commit()
     conn.close()
 
@@ -62,7 +91,6 @@ def get_auto_location():
     """Kullanıcının tarayıcı/istemci IP adresinden şehir ve ülke bilgisini tespit eder."""
     try:
         client_ip = ""
-        # Streamlit HTTP istek başlıklarından gerçek istemci IP'sini alma (Sunucu IP'sini önlemek için)
         if hasattr(st, "context") and hasattr(st.context, "headers"):
             headers = st.context.headers
             if headers:
@@ -86,45 +114,25 @@ def get_auto_location():
         pass
     return ""
 
-def hash_password(password: str) -> str:
-    """Şifreyi SHA-256 algoritması ile hash'ler."""
-    return hashlib.sha256(password.encode('utf-8')).hexdigest()
-
-def verify_password(stored_password: str, provided_password: str) -> bool:
-    """Hash'lenmiş veya eski açık metin şifreleri doğrular."""
-    if len(stored_password) == 64 and all(c in '0123456789abcdefABCDEF' for c in stored_password):
-        return stored_password == hash_password(provided_password)
-    return stored_password == provided_password
-
 def check_password_strength(password: str):
     """Şifre gücünü ve eksik kriterleri kontrol eder."""
     score = 0
     feedback = []
     
-    if len(password) >= 8:
-        score += 1
-    else:
-        feedback.append("En az 8 karakter olmalı.")
+    if len(password) >= 8: score += 1
+    else: feedback.append("En az 8 karakter olmalı.")
         
-    if re.search(r"[A-Z]", password):
-        score += 1
-    else:
-        feedback.append("En az 1 büyük harf (A-Z) içermeli.")
+    if re.search(r"[A-Z]", password): score += 1
+    else: feedback.append("En az 1 büyük harf (A-Z) içermeli.")
         
-    if re.search(r"[a-z]", password):
-        score += 1
-    else:
-        feedback.append("En az 1 küçük harf (a-z) içermeli.")
+    if re.search(r"[a-z]", password): score += 1
+    else: feedback.append("En az 1 küçük harf (a-z) içermeli.")
         
-    if re.search(r"[0-9]", password):
-        score += 1
-    else:
-        feedback.append("En az 1 rakam (0-9) içermeli.")
+    if re.search(r"[0-9]", password): score += 1
+    else: feedback.append("En az 1 rakam (0-9) içermeli.")
         
-    if re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
-        score += 1
-    else:
-        feedback.append("En az 1 özel karakter (!@#$%^&* vb.) içermeli.")
+    if re.search(r"[!@#$%^&*(),.?\":{}|<>]", password): score += 1
+    else: feedback.append("En az 1 özel karakter (!@#$%^&* vb.) içermeli.")
         
     return score, feedback
 
@@ -133,7 +141,7 @@ def check_password_strength(password: str):
 def db_get_user(email):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT name, password, location, birth_date, birth_time, bio, email_notifications, credits, saved_readings FROM users WHERE email = ?", (email,))
+    cursor.execute("SELECT name, password, location, birth_date, birth_time, bio, email_notifications, credits, saved_readings, is_admin FROM users WHERE email = ?", (email,))
     row = cursor.fetchone()
     conn.close()
     if row:
@@ -146,9 +154,34 @@ def db_get_user(email):
             "bio": row[5],
             "email_notifications": bool(row[6]),
             "credits": row[7],
-            "saved_readings": json.loads(row[8]) if row[8] else []
+            "saved_readings": json.loads(row[8]) if row[8] else [],
+            "is_admin": bool(row[9]) if len(row) > 9 and row[9] else False
         }
     return None
+
+def db_get_all_users():
+    """Admin paneli için tüm üyeleri çeker."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT email, name, location, credits, is_admin, email_notifications FROM users")
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def db_update_user_credits(email, new_credits):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET credits = ? WHERE email = ?", (new_credits, email))
+    conn.commit()
+    conn.close()
+
+def db_delete_user(email):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM users WHERE email = ?", (email,))
+    cursor.execute("DELETE FROM chat_history WHERE email = ?", (email,))
+    conn.commit()
+    conn.close()
 
 def db_save_user(email, data):
     conn = sqlite3.connect(DB_FILE)
@@ -158,8 +191,8 @@ def db_save_user(email, data):
     saved_readings_str = json.dumps(data.get("saved_readings", []), ensure_ascii=False)
     
     cursor.execute('''
-        INSERT OR REPLACE INTO users (email, name, password, location, birth_date, birth_time, bio, email_notifications, credits, saved_readings)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO users (email, name, password, location, birth_date, birth_time, bio, email_notifications, credits, saved_readings, is_admin)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         email,
         data.get("name"),
@@ -170,7 +203,8 @@ def db_save_user(email, data):
         data.get("bio"),
         1 if data.get("email_notifications", True) else 0,
         data.get("credits", 20),
-        saved_readings_str
+        saved_readings_str,
+        1 if data.get("is_admin", False) else 0
     ))
     conn.commit()
     conn.close()
@@ -263,8 +297,7 @@ def get_groq_client():
 @st.cache_data(ttl=300)
 def get_groq_models_list():
     client = get_groq_client()
-    if not client:
-        return []
+    if not client: return []
     try:
         models_data = client.models.list()
         valid_models = []
@@ -282,16 +315,11 @@ def generate_completion(messages, preferred_model=None):
         return "Groq API anahtarı bulunamadı. Lütfen st.secrets veya ortam değişkenlerini kontrol edin."
 
     candidate_models = []
-    if preferred_model:
-        candidate_models.append(preferred_model)
+    if preferred_model: candidate_models.append(preferred_model)
     
     candidate_models.extend(list(MODEL_OPTIONS.values()))
-    
-    active_models = get_groq_models_list()
-    candidate_models.extend(active_models)
-
-    fallback_models = ["gemma2-9b-it", "llama3-8b-8192"]
-    candidate_models.extend(fallback_models)
+    candidate_models.extend(get_groq_models_list())
+    candidate_models.extend(["gemma2-9b-it", "llama3-8b-8192"])
 
     models_to_try = []
     for m in candidate_models:
@@ -323,6 +351,7 @@ if "recent_queries" not in st.session_state: st.session_state.recent_queries = [
 if "auth_mode" not in st.session_state: st.session_state.auth_mode = None
 if "logged_in_user" not in st.session_state: st.session_state.logged_in_user = None
 if "logged_in_email" not in st.session_state: st.session_state.logged_in_email = None
+if "is_admin" not in st.session_state: st.session_state.is_admin = False
 if "guest_credits" not in st.session_state: st.session_state.guest_credits = 10
 if "astro_result" not in st.session_state: st.session_state.astro_result = ""
 if "tarot_result" not in st.session_state: st.session_state.tarot_result = ""
@@ -350,6 +379,8 @@ def deduct_credits(model_id):
         u_email = st.session_state.logged_in_email
         user_data = db_get_user(u_email)
         if user_data:
+            if user_data.get("is_admin", False):
+                return True # Adminler kredi harcamaz
             current_credits = user_data.get("credits", 0)
             if current_credits < required_cost:
                 st.error(f"⚠️ Yetersiz kredi! Bu işlem {required_cost} kredi gerektiriyor. Mevcut krediniz: {current_credits}.")
@@ -364,6 +395,50 @@ def deduct_credits(model_id):
     return True
 
 # --- MODALLAR VE DİYALOGLAR ---
+
+@st.dialog("👑 Admin Yönetim Paneli", width="large")
+def admin_panel_dialog():
+    st.subheader("👥 Tüm Üyeler & Kullanıcı Yönetimi")
+    users = db_get_all_users()
+    
+    df = pd.DataFrame(users, columns=["E-posta", "Ad Soyad", "Konum", "Kredi Bakiyesi", "Admin Mi?", "E-Posta Bülteni"])
+    df["Admin Mi?"] = df["Admin Mi?"].map({1: "👑 Admin", 0: "👤 Üye"})
+    df["E-Posta Bülteni"] = df["E-Posta Bülteni"].map({1: "Evet", 0: "Hayır"})
+    
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    
+    st.markdown("---")
+    st.subheader("🛠️ Hızlı Kullanıcı İşlemleri")
+    
+    col_u, col_act = st.columns([2, 2])
+    with col_u:
+        user_list = [u[0] for u in users]
+        selected_user_email = st.selectbox("İşlem Yapılacak Üyeyi Seçin:", user_list)
+        
+    with col_act:
+        target_user = db_get_user(selected_user_email)
+        if target_user:
+            new_credit_val = st.number_input("Yeni Kredi Miktarı:", value=int(target_user.get("credits", 0)), step=10)
+            if st.button("💾 Krediyi Güncelle", use_container_width=True):
+                db_update_user_credits(selected_user_email, new_credit_val)
+                st.success(f"✅ {selected_user_email} kullanıcısının kredisi {new_credit_val} olarak güncellendi!")
+                st.rerun()
+
+    st.markdown("---")
+    col_del, col_close = st.columns(2)
+    with col_del:
+        if st.button("🗑️ Seçili Üyeyi Sil", type="primary", use_container_width=True):
+            if selected_user_email == st.session_state.logged_in_email:
+                st.error("⚠️ Kendi admin hesabınızı silemezsiniz!")
+            else:
+                db_delete_user(selected_user_email)
+                st.success(f"✅ {selected_user_email} başarıyla silindi!")
+                st.rerun()
+                
+    with col_close:
+        if st.button("Kapat", use_container_width=True):
+            st.session_state.auth_mode = None
+            st.rerun()
 
 @st.dialog("✨ Lunara.ai - Giriş Yap")
 def login_dialog():
@@ -380,6 +455,7 @@ def login_dialog():
                 
             st.session_state.logged_in_email = l_email
             st.session_state.logged_in_user = user_data["name"]
+            st.session_state.is_admin = user_data.get("is_admin", False)
             st.session_state.messages = db_get_chat_history(l_email)
             st.session_state.auth_mode = None
             st.rerun()
@@ -435,9 +511,10 @@ def signup_dialog():
                 st.warning("⚠️ Bu e-posta zaten kullanımda.")
             else:
                 hashed_pass = hash_password(s_pass)
-                db_save_user(s_email, {"name": s_name, "password": hashed_pass, "credits": 20})
+                db_save_user(s_email, {"name": s_name, "password": hashed_pass, "credits": 20, "is_admin": False})
                 st.session_state.logged_in_email = s_email
                 st.session_state.logged_in_user = s_name
+                st.session_state.is_admin = False
                 st.session_state.messages = []
                 st.session_state.auth_mode = None
                 st.rerun()
@@ -500,7 +577,6 @@ def profile_dialog():
     st.write("**Konum Bilgisi:**")
     current_loc = st.session_state.get("temp_location", user_data.get("location", ""))
     
-    # Şehir seçimi ve GPS butonunun yan yana yerleştirilmesi
     col_city, col_gps = st.columns([5, 1])
     with col_city:
         selected_tr_city = st.selectbox(
@@ -523,15 +599,12 @@ def profile_dialog():
 
     new_loc = st.text_input("Konum (İl/Ülke veya Özel Konum)", value=current_loc)
 
-    # --- BİLDİRİM ABONELİĞİ ---
     email_notif = st.checkbox(
         "🔔 E-posta bildirimlerine ve günlük burç bültenine abone ol",
         value=user_data.get("email_notifications", True)
     )
     
     st.markdown("---")
-    
-    # --- ŞİFRE DEĞİŞTİRME (ESKİ ŞİFRE SORULMAZ) ---
     st.write("🔒 **Şifre Değiştirme** (Şifrenizi değiştirmek istemiyorsanız alanları boş bırakın)")
     new_pass = st.text_input("Yeni Şifreniz", type="password", key="p_new")
     confirm_new_pass = st.text_input("Yeni Şifreniz (Tekrar)", type="password", key="p_conf")
@@ -547,7 +620,6 @@ def profile_dialog():
     
     col1, col2 = st.columns(2)
     if col1.button("Kaydet", use_container_width=True):
-        # Şifre Değişikliği İsteği
         if new_pass or confirm_new_pass:
             if not new_pass:
                 st.error("⚠️ Lütfen yeni bir şifre girin!")
@@ -563,7 +635,6 @@ def profile_dialog():
                 
             user_data["password"] = hash_password(new_pass)
 
-        # Temp Konum Temizliği & Profil Güncelleme
         final_loc = new_loc
         if "temp_location" in st.session_state:
             del st.session_state["temp_location"]
@@ -590,6 +661,7 @@ if st.session_state.auth_mode == "login": login_dialog()
 elif st.session_state.auth_mode == "signup": signup_dialog()
 elif st.session_state.auth_mode == "forgot_pass": forgot_password_dialog()
 elif st.session_state.auth_mode == "profile": profile_dialog()
+elif st.session_state.auth_mode == "admin_panel": admin_panel_dialog()
 
 # Yan Panel
 with st.sidebar:
@@ -598,7 +670,8 @@ with st.sidebar:
     
     if st.session_state.logged_in_email:
         u_record = db_get_user(st.session_state.logged_in_email)
-        st.markdown(f"✨ **{st.session_state.logged_in_user}**")
+        admin_badge = " 👑 (Admin)" if st.session_state.is_admin else ""
+        st.markdown(f"✨ **{st.session_state.logged_in_user}**{admin_badge}")
         st.caption(f"🪙 Kredi Bakiyesi: **{u_record.get('credits', 0)}**")
         
         col1, col2 = st.columns(2)
@@ -608,8 +681,16 @@ with st.sidebar:
         if col2.button("Çıkış", use_container_width=True):
             st.session_state.logged_in_email = None
             st.session_state.logged_in_user = None
+            st.session_state.is_admin = False
             st.session_state.messages = []
             st.rerun()
+
+        # Admin Paneli Butonu
+        if st.session_state.is_admin:
+            st.markdown("---")
+            if st.button("👑 Admin Paneli", use_container_width=True, type="primary"):
+                st.session_state.auth_mode = "admin_panel"
+                st.rerun()
     else:
         st.caption(f"🪙 Misafir Kredisi: **{st.session_state.guest_credits}**")
         col1, col2 = st.columns(2)
@@ -650,7 +731,6 @@ def process_chat_request(prompt_text, model_id=None):
 
 st.title("🌙 Lunara.ai | Mistik Rehber")
 
-# Sekmelerin tanımlanması
 tab1, tab2, tab3, tab4 = st.tabs(["💬 Mistik Sohbet", "🪐 Doğum Haritası Analizi", "🃏 3 Kart Tarot", "☕ Kahve Falı"])
 
 # --- TAB 1: MİSTİK SOHBET ---
@@ -688,20 +768,16 @@ with tab2:
         if u_data:
             default_ad = u_data.get("name", "")
             default_sehir = u_data.get("location", "")
-            if u_data.get("birth_date"):
-                default_tarih = u_data.get("birth_date")
-            if u_data.get("birth_time"):
-                default_saat = u_data.get("birth_time")
+            if u_data.get("birth_date"): default_tarih = u_data.get("birth_date")
+            if u_data.get("birth_time"): default_saat = u_data.get("birth_time")
 
     with st.form("astro_form"):
         ad = st.text_input("Adınız ve Soyadınız", value=default_ad)
         
         st.write("**Doğum Tarihiniz:**")
         col_d, col_m, col_y = st.columns(3)
-        with col_d:
-            sel_day = st.selectbox("Gün", list(range(1, 32)), index=default_tarih.day - 1)
-        with col_m:
-            sel_month = st.selectbox("Ay", list(range(1, 13)), index=default_tarih.month - 1)
+        with col_d: sel_day = st.selectbox("Gün", list(range(1, 32)), index=default_tarih.day - 1)
+        with col_m: sel_month = st.selectbox("Ay", list(range(1, 13)), index=default_tarih.month - 1)
         with col_y:
             current_year = datetime.date.today().year
             years_list = list(range(current_year, 1919, -1))
