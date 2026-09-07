@@ -346,39 +346,75 @@ def scroll_to_latest_message():
     )
 
 def pin_chat_bar_to_bottom():
-    """CSS :has() kuralı bazı durumlarda gecikebildiği için,
-    alt sohbet çubuğunu JS ile de doğrudan ekranın altına sabitler ve
-    Streamlit yeniden çizim yaptığında (DOM değiştiğinde) bunu korur."""
+    """Alt sohbet çubuğunu gerçek ekran viewport'una sabitler.
+    NOT: Elemanı doğrudan <body>'ye taşımak (reparent) React'in olay
+    yönetimini (tıklama, yazma) bozabileceği için DOM yapısı korunuyor;
+    bunun yerine çubuğun sabitlenmesini engelleyen 'transform' özelliği
+    taşıyan üst kapsayıcılar (Streamlit'in kaydırma animasyonları için
+    kullandığı) tespit edilip nötrlüyor, çünkü position:fixed bir
+    transform'lu üst elemana denk geldiğinde viewport yerine o elemana
+    göre konumlanıyor ve sayfa kaydırılınca kayıyor. Bir MutationObserver
+    + periyodik kontrol ile bu durum sürekli korunuyor."""
     components.html(
         """
         <script>
-            function pinLunaraChatBar() {
+            try {
                 const doc = window.parent.document;
-                const inputs = doc.querySelectorAll('input[placeholder*="Fal, tarot veya bur"]');
-                inputs.forEach((inp) => {
-                    const bar = inp.closest('div[data-testid="stForm"]');
-                    if (bar) {
-                        bar.style.position = "fixed";
-                        bar.style.bottom = "0";
-                        bar.style.left = "0";
-                        bar.style.right = "0";
-                        bar.style.width = "100%";
-                        bar.style.zIndex = "999999";
-                        bar.style.padding = "22px 24px";
-                        bar.style.minHeight = "92px";
-                        bar.style.boxSizing = "border-box";
-                        bar.style.margin = "0";
-                        bar.style.boxShadow = "0 -4px 25px rgba(0, 0, 0, 0.4)";
-                        bar.style.borderTop = "1px solid rgba(255, 255, 255, 0.1)";
-                        if (!bar.style.backgroundColor) {
-                            bar.style.backgroundColor = getComputedStyle(doc.body).backgroundColor || "#0e1117";
+
+                function neutralizeAncestorTransforms(el) {
+                    let node = el.parentElement;
+                    while (node && node !== doc.body) {
+                        const cs = getComputedStyle(node);
+                        if (cs.transform && cs.transform !== "none") {
+                            node.style.setProperty("transform", "none", "important");
                         }
+                        if (cs.filter && cs.filter !== "none") {
+                            node.style.setProperty("filter", "none", "important");
+                        }
+                        node = node.parentElement;
                     }
-                });
+                }
+
+                function pinLunaraChatBar() {
+                    const inputs = doc.querySelectorAll('input[placeholder*="Fal, tarot veya bur"]');
+                    inputs.forEach((inp) => {
+                        const bar = inp.closest('div[data-testid="stForm"]');
+                        if (!bar) return;
+
+                        neutralizeAncestorTransforms(bar);
+
+                        const styleProps = {
+                            "position": "fixed",
+                            "bottom": "0px",
+                            "left": "0px",
+                            "right": "0px",
+                            "width": "100%",
+                            "z-index": "999999",
+                            "padding": "22px 24px",
+                            "min-height": "92px",
+                            "box-sizing": "border-box",
+                            "margin": "0px",
+                            "box-shadow": "0 -4px 25px rgba(0, 0, 0, 0.4)",
+                            "border-top": "1px solid rgba(255, 255, 255, 0.1)"
+                        };
+                        for (const [prop, val] of Object.entries(styleProps)) {
+                            bar.style.setProperty(prop, val, "important");
+                        }
+                        if (!bar.style.backgroundColor) {
+                            const bg = getComputedStyle(doc.body).backgroundColor || "#0e1117";
+                            bar.style.setProperty("background-color", bg, "important");
+                        }
+                    });
+                }
+
+                pinLunaraChatBar();
+                const lunaraObserver = new MutationObserver(pinLunaraChatBar);
+                lunaraObserver.observe(doc.body, {childList: true, subtree: true});
+                // Ek güvence: bazı yeniden çizimler mutation observer'ı kaçırabiliyor
+                setInterval(pinLunaraChatBar, 800);
+            } catch (e) {
+                console.warn("Lunara chat bar pin failed:", e);
             }
-            pinLunaraChatBar();
-            const lunaraObserver = new MutationObserver(pinLunaraChatBar);
-            lunaraObserver.observe(window.parent.document.body, {childList: true, subtree: true});
         </script>
         """,
         height=0,
