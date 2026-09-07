@@ -245,7 +245,9 @@ if "system_prompt" not in st.session_state:
     st.session_state.system_prompt = (
         "Sen Lunara'sın. Profesyonel, empatik ve mistik bir astroloji ve fal danışmanısın. "
         "DİL KURALI: Cevaplarının TAMAMI YALNIZCA KUSURSUZ VE AKICI TÜRKÇE OLMALIDIR. "
-        "Asla İngilizce cümle veya düşünce süreci (<think>) yazma. Edebi bir bütünlük içinde konuş."
+        "Asla İngilizce cümle veya düşünce süreci (<think>) yazma. "
+        "KESİN KURAL: Hiçbir zaman 'Bu bilgiler ışığında...', 'Gökyüzünün o anki dansını inceleyerek...', 'Sizin için hazırladım' gibi "
+        "giriş, açıklama veya sunuş cümleleri yazma. Doğrudan ve net bir şekilde doğrudan analizin/yorumun kendisine başla."
     )
 
 MODEL_CREDIT_COSTS = {
@@ -487,7 +489,7 @@ with tab2:
                             f"- Doğum Tarihi: {tarih}\n"
                             f"- Doğum Saati: {saat}\n"
                             f"- Doğum Yeri: {sehir}\n\n"
-                            "Bu bilgilere dayanarak profesyonel bir astrolog gibi TAMAMEN TÜRKÇE, akıcı ve edebi bir dille şu başlıklar altında detaylı bir analiz sun:\n"
+                            "Giriş veya sunuş cümlesi yazmadan DOĞRUDAN 1. maddeden başlayarak şu başlıklar altında analizi sun:\n"
                             "1. **Güneş Burcu ve Öz Kimlik:**\n"
                             "2. **Yükselen Burcu ve Dış Dünya:**\n"
                             "3. **Ay Burcu ve İç Dünya:**\n"
@@ -511,7 +513,7 @@ with tab3:
     if st.button("Kartları Çek"):
         if deduct_credits("llama-3.3-70b-versatile"):
             with st.spinner("Karıştırılıyor..."):
-                res = generate_completion([{"role": "user", "content": f"{niyet} niyetine 3 tarot kartı çek ve yorumla."}], preferred_model="llama-3.3-70b-versatile")
+                res = generate_completion([{"role": "user", "content": f"Giriş cümlesi yazmadan doğrudan {niyet} niyetine 3 tarot kartı çek ve yorumla."}], preferred_model="llama-3.3-70b-versatile")
                 st.session_state.tarot_result = res
                 st.rerun()
 
@@ -526,7 +528,7 @@ with tab4:
     if st.button("Analiz Yap"):
         if metin and deduct_credits("llama-3.3-70b-versatile"):
             with st.spinner("Çözümleniyor..."):
-                res = generate_completion([{"role": "user", "content": f"{metin} sembollerini yorumla."}], preferred_model="llama-3.3-70b-versatile")
+                res = generate_completion([{"role": "user", "content": f"Giriş/sunuş cümlesi yazmadan doğrudan şu sembolleri yorumla: {metin}"}], preferred_model="llama-3.3-70b-versatile")
                 st.session_state.kahve_result = res
                 st.rerun()
 
