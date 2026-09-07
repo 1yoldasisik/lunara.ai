@@ -4,6 +4,7 @@ import json
 import re
 import sqlite3
 import hashlib
+import urllib.request
 import streamlit as st
 from groq import Groq
 
@@ -41,7 +42,22 @@ def init_db():
 
 init_db()
 
-# --- GÜVENLİK VE ŞİFRE YARDIMCI FONKSİYONLARI ---
+# --- YARDIMCI FONKSİYONLAR (KONUM & GÜVENLİK) ---
+
+def get_auto_location():
+    """Kullanıcının IP adresinden şehir ve ülke bilgisini otomatik tespit eder."""
+    try:
+        url = "http://ip-api.com/json/"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=3) as response:
+            data = json.loads(response.read().decode())
+            if data.get("status") == "success":
+                city = data.get("city", "")
+                country = data.get("country", "")
+                return f"{city}, {country}".strip(", ")
+    except Exception:
+        pass
+    return ""
 
 def hash_password(password: str) -> str:
     """Şifreyi SHA-256 algoritması ile hash'ler."""
@@ -51,7 +67,7 @@ def verify_password(stored_password: str, provided_password: str) -> bool:
     """Hash'lenmiş veya eski açık metin şifreleri doğrular."""
     if len(stored_password) == 64 and all(c in '0123456789abcdefABCDEF' for c in stored_password):
         return stored_password == hash_password(provided_password)
-    return stored_password == provided_password  # Eski düz metin şifreler için geriye dönük uyumluluk
+    return stored_password == provided_password
 
 def check_password_strength(password: str):
     """Şifre gücünü ve eksik kriterleri kontrol eder."""
@@ -85,7 +101,7 @@ def check_password_strength(password: str):
         
     return score, feedback
 
-# --- VERİTABANI YARDIMCI FONKSİYONLARI ---
+# --- VERİTABANI İŞLEMLERİ ---
 
 def db_get_user(email):
     conn = sqlite3.connect(DB_FILE)
@@ -161,7 +177,7 @@ def db_clear_chat_history(email):
     conn.commit()
     conn.close()
 
-# Sayfa ve Tema Yapılandırması
+# Sayfa Yapılandırması
 st.set_page_config(page_title="Lunara.ai | Mistik Rehber", page_icon="🌙", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
@@ -331,7 +347,6 @@ def login_dialog():
     if col1.button("Giriş Yap", use_container_width=True):
         user_data = db_get_user(l_email)
         if user_data and verify_password(user_data["password"], l_pass):
-            # Otomatik Hash Güncelleme (Eski düz metin şifreleri hash'e dönüştürür)
             if user_data["password"] == l_pass:
                 user_data["password"] = hash_password(l_pass)
                 db_save_user(l_email, user_data)
@@ -359,7 +374,6 @@ def signup_dialog():
     s_email = st.text_input("E-posta Adresi")
     s_pass = st.text_input("Şifre", type="password")
     
-    # ŞİFRE GÜÇ GÖSTERGESİ
     if s_pass:
         score, feedback = check_password_strength(s_pass)
         progress_val = min(score / 5.0, 1.0)
@@ -371,14 +385,11 @@ def signup_dialog():
     
     st.markdown("---")
     
-    # KVKK VE KULLANIM KOŞULLARI ONAYI
     with st.expander("📜 KVKK Aydınlatma Metni & Kullanım Koşulları"):
         st.write("""
         **1. Kişisel Verilerin Korunması:** Lunara.ai, kişisel verilerinizi 6698 sayılı KVKK gereğince yalnızca yapay zeka tabanlı astroloji/fal hizmeti sunmak ve üyelik işlemlerini yürütmek amacıyla işler.
-        
-        **2. Veri Güvenliği:** Şifreleriniz SHA-256 kriptografik yöntemlerle şifrelenerek saklanır.
-        
-        **3. Hizmet Şartları:** Üretilen içerikler eğlence ve kişisel gelişim amaçlıdır, kesin veya tıbbi/hukuki tavsiye niteliği taşımaz.
+        **2. Veri Güvenliği:** Şifreleriniz kriptografik yöntemlerle şifrelenerek saklanır.
+        **3. Hizmet Şartları:** Üretilen içerikler eğlence ve kişisel gelişim amaçlıdır.
         """)
         
     kvkk_check = st.checkbox("KVKK Aydınlatma Metni'ni ve Kullanım Koşulları'nı okudum, kabul ediyorum.")
@@ -449,6 +460,7 @@ def forgot_password_dialog():
 def profile_dialog():
     email = st.session_state.logged_in_email
     user_data = db_get_user(email)
+    
     st.info(f"🪙 **Mevcut Kredi:** {user_data.get('credits', 0)}")
     if st.button("✨ 50 Kredi Yükle"):
         user_data["credits"] += 50
@@ -456,8 +468,36 @@ def profile_dialog():
         st.rerun()
     
     new_name = st.text_input("Ad Soyad", value=user_data.get("name", ""))
-    new_pass = st.text_input("Yeni Şifre (Boş bırakırsanız değişmez)", type="password")
-    new_loc = st.text_input("Konum", value=user_data.get("location", ""))
+    
+    # --- OTOMATİK KONUM BULMA ---
+    st.write("**Konum Bilgisi:**")
+    current_loc = st.session_state.get("temp_location", user_data.get("location", ""))
+    col_loc1, col_loc2 = st.columns([3, 1])
+    with col_loc1:
+        new_loc = st.text_input("Konum (İl/Ülke)", value=current_loc, label_visibility="collapsed")
+    with col_loc2:
+        if st.button("📍 Otomatik Bul", use_container_width=True):
+            auto_loc = get_auto_location()
+            if auto_loc:
+                st.session_state["temp_location"] = auto_loc
+                st.toast(f"📍 Konumunuz tespit edildi: {auto_loc}")
+                st.rerun()
+            else:
+                st.error("Konumunuz tespit edilemedi.")
+
+    # --- BİLDİRİM ABONELİĞİ ---
+    email_notif = st.checkbox(
+        "🔔 E-posta bildirimlerine ve günlük burç bültenine abone ol",
+        value=user_data.get("email_notifications", True)
+    )
+    
+    st.markdown("---")
+    
+    # --- ŞİFRE DEĞİŞTİRME & ŞİFRE ONAYI ---
+    st.write("🔒 **Şifre Değiştirme** (Şifrenizi değiştirmek istemiyorsanız alanları boş bırakın)")
+    current_pass = st.text_input("Mevcut Şifreniz", type="password", key="p_curr")
+    new_pass = st.text_input("Yeni Şifreniz", type="password", key="p_new")
+    confirm_new_pass = st.text_input("Yeni Şifreniz (Tekrar)", type="password", key="p_conf")
     
     if new_pass:
         score, feedback = check_password_strength(new_pass)
@@ -470,20 +510,48 @@ def profile_dialog():
     
     col1, col2 = st.columns(2)
     if col1.button("Kaydet", use_container_width=True):
-        if new_pass:
+        # Şifre Değişikliği İstendiyse Doğrulama Adımları
+        if new_pass or current_pass or confirm_new_pass:
+            if not current_pass:
+                st.error("⚠️ Şifre değiştirmek için mevcut şifrenizi girmelisiniz!")
+                return
+            if not verify_password(user_data["password"], current_pass):
+                st.error("⚠️ Mevcut şifreniz hatalı!")
+                return
+            if not new_pass:
+                st.error("⚠️ Lütfen yeni bir şifre girin!")
+                return
+            if new_pass != confirm_new_pass:
+                st.error("⚠️ Yeni şifreleriniz birbiriyle eşleşmiyor!")
+                return
+            
             score, _ = check_password_strength(new_pass)
             if score < 3:
                 st.error("⚠️ Yeni şifreniz yeterince güçlü değil.")
                 return
+                
             user_data["password"] = hash_password(new_pass)
-            
-        user_data.update({"name": new_name, "location": new_loc})
+
+        # Temp Konum Temizliği & Profil Güncelleme
+        final_loc = new_loc
+        if "temp_location" in st.session_state:
+            del st.session_state["temp_location"]
+
+        user_data.update({
+            "name": new_name,
+            "location": final_loc,
+            "email_notifications": email_notif
+        })
+        
         db_save_user(email, user_data)
         st.session_state.logged_in_user = new_name
         st.session_state.auth_mode = None
+        st.toast("✅ Profiliniz başarıyla güncellendi!")
         st.rerun()
-        
+
     if col2.button("İptal", use_container_width=True):
+        if "temp_location" in st.session_state:
+            del st.session_state["temp_location"]
         st.session_state.auth_mode = None
         st.rerun()
 
