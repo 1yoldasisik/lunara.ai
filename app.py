@@ -161,7 +161,8 @@ st.markdown("""
         right: 0 !important;
         z-index: 999999 !important;
         background-color: var(--background-color, #0e1117) !important;
-        padding: 12px 24px !important;
+        padding: 22px 24px !important;
+        min-height: 92px !important;
         box-shadow: 0 -4px 25px rgba(0, 0, 0, 0.4) !important;
         border-top: 1px solid rgba(255, 255, 255, 0.1) !important;
         width: 100% !important;
@@ -177,7 +178,7 @@ st.markdown("""
         font-size: 0.82rem !important;
     }
     .main .block-container {
-        padding-bottom: 140px !important;
+        padding-bottom: 170px !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -339,6 +340,45 @@ def scroll_to_latest_message():
             if (anchor) {
                 anchor.scrollIntoView({behavior: "smooth", block: "end"});
             }
+        </script>
+        """,
+        height=0,
+    )
+
+def pin_chat_bar_to_bottom():
+    """CSS :has() kuralı bazı durumlarda gecikebildiği için,
+    alt sohbet çubuğunu JS ile de doğrudan ekranın altına sabitler ve
+    Streamlit yeniden çizim yaptığında (DOM değiştiğinde) bunu korur."""
+    components.html(
+        """
+        <script>
+            function pinLunaraChatBar() {
+                const doc = window.parent.document;
+                const inputs = doc.querySelectorAll('input[placeholder*="Fal, tarot veya bur"]');
+                inputs.forEach((inp) => {
+                    const bar = inp.closest('div[data-testid="stForm"]');
+                    if (bar) {
+                        bar.style.position = "fixed";
+                        bar.style.bottom = "0";
+                        bar.style.left = "0";
+                        bar.style.right = "0";
+                        bar.style.width = "100%";
+                        bar.style.zIndex = "999999";
+                        bar.style.padding = "22px 24px";
+                        bar.style.minHeight = "92px";
+                        bar.style.boxSizing = "border-box";
+                        bar.style.margin = "0";
+                        bar.style.boxShadow = "0 -4px 25px rgba(0, 0, 0, 0.4)";
+                        bar.style.borderTop = "1px solid rgba(255, 255, 255, 0.1)";
+                        if (!bar.style.backgroundColor) {
+                            bar.style.backgroundColor = getComputedStyle(doc.body).backgroundColor || "#0e1117";
+                        }
+                    }
+                });
+            }
+            pinLunaraChatBar();
+            const lunaraObserver = new MutationObserver(pinLunaraChatBar);
+            lunaraObserver.observe(window.parent.document.body, {childList: true, subtree: true});
         </script>
         """,
         height=0,
@@ -623,6 +663,8 @@ with st.container():
             active_model_id = MODEL_OPTIONS[selected_label]
         with b2: user_text = st.text_input("Mesaj", label_visibility="collapsed", placeholder="Fal, tarot veya burçlar hakkında bir şey sor...")
         with b3: submitted = st.form_submit_button("➤")
+
+pin_chat_bar_to_bottom()
 
 if submitted and user_text:
     if process_chat_request(user_text, active_model_id):
