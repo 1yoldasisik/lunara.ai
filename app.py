@@ -5,7 +5,6 @@ import re
 import sqlite3
 import bcrypt
 import streamlit as st
-import streamlit.components.v1 as components
 from groq import Groq
 
 # SQLite Veritabanı Yapılandırması
@@ -154,31 +153,21 @@ st.markdown("""
         flex: 1 1 0% !important;
         min-width: 0px !important;
     }
-    div[data-testid="stForm"]:has(input[placeholder*="Fal, tarot veya burçlar"]) {
+    form:has(input[placeholder*="Fal, tarot veya burçlar"]) {
         position: fixed !important;
         bottom: 0 !important;
         left: 0 !important;
         right: 0 !important;
         z-index: 999999 !important;
         background-color: var(--background-color, #0e1117) !important;
-        padding: 22px 24px !important;
-        min-height: 92px !important;
+        padding: 12px 24px !important;
         box-shadow: 0 -4px 25px rgba(0, 0, 0, 0.4) !important;
         border-top: 1px solid rgba(255, 255, 255, 0.1) !important;
         width: 100% !important;
         box-sizing: border-box !important;
-        margin: 0 !important;
-    }
-    /* Model seçme sütununu küçült */
-    div[data-testid="stForm"]:has(input[placeholder*="Fal, tarot veya burçlar"]) [data-testid="stHorizontalBlock"] > div[data-testid="column"]:first-child {
-        flex: 0 0 150px !important;
-        max-width: 150px !important;
-    }
-    div[data-testid="stForm"]:has(input[placeholder*="Fal, tarot veya burçlar"]) [data-testid="stHorizontalBlock"] > div[data-testid="column"]:first-child [data-baseweb="select"] {
-        font-size: 0.82rem !important;
     }
     .main .block-container {
-        padding-bottom: 170px !important;
+        padding-bottom: 140px !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -328,97 +317,6 @@ def refund_credits(model_id):
 
 def generation_failed(response_text):
     return isinstance(response_text, str) and response_text.startswith("Yıldızlardan şu an yanıt alınamadı")
-
-def scroll_to_latest_message():
-    """Sohbet listesinin en altına, yani en son alınan yoruma otomatik kaydırır."""
-    st.markdown('<div id="lunara-son-mesaj"></div>', unsafe_allow_html=True)
-    components.html(
-        """
-        <script>
-            const targetDoc = window.parent.document;
-            const anchor = targetDoc.getElementById("lunara-son-mesaj");
-            if (anchor) {
-                anchor.scrollIntoView({behavior: "smooth", block: "end"});
-            }
-        </script>
-        """,
-        height=0,
-    )
-
-def pin_chat_bar_to_bottom():
-    """Alt sohbet çubuğunu gerçek ekran viewport'una sabitler.
-    NOT: Elemanı doğrudan <body>'ye taşımak (reparent) React'in olay
-    yönetimini (tıklama, yazma) bozabileceği için DOM yapısı korunuyor;
-    bunun yerine çubuğun sabitlenmesini engelleyen 'transform' özelliği
-    taşıyan üst kapsayıcılar (Streamlit'in kaydırma animasyonları için
-    kullandığı) tespit edilip nötrlüyor, çünkü position:fixed bir
-    transform'lu üst elemana denk geldiğinde viewport yerine o elemana
-    göre konumlanıyor ve sayfa kaydırılınca kayıyor. Bir MutationObserver
-    + periyodik kontrol ile bu durum sürekli korunuyor."""
-    components.html(
-        """
-        <script>
-            try {
-                const doc = window.parent.document;
-
-                function neutralizeAncestorTransforms(el) {
-                    let node = el.parentElement;
-                    while (node && node !== doc.body) {
-                        const cs = getComputedStyle(node);
-                        if (cs.transform && cs.transform !== "none") {
-                            node.style.setProperty("transform", "none", "important");
-                        }
-                        if (cs.filter && cs.filter !== "none") {
-                            node.style.setProperty("filter", "none", "important");
-                        }
-                        node = node.parentElement;
-                    }
-                }
-
-                function pinLunaraChatBar() {
-                    const inputs = doc.querySelectorAll('input[placeholder*="Fal, tarot veya bur"]');
-                    inputs.forEach((inp) => {
-                        const bar = inp.closest('div[data-testid="stForm"]');
-                        if (!bar) return;
-
-                        neutralizeAncestorTransforms(bar);
-
-                        const styleProps = {
-                            "position": "fixed",
-                            "bottom": "0px",
-                            "left": "0px",
-                            "right": "0px",
-                            "width": "100%",
-                            "z-index": "999999",
-                            "padding": "22px 24px",
-                            "min-height": "92px",
-                            "box-sizing": "border-box",
-                            "margin": "0px",
-                            "box-shadow": "0 -4px 25px rgba(0, 0, 0, 0.4)",
-                            "border-top": "1px solid rgba(255, 255, 255, 0.1)"
-                        };
-                        for (const [prop, val] of Object.entries(styleProps)) {
-                            bar.style.setProperty(prop, val, "important");
-                        }
-                        if (!bar.style.backgroundColor) {
-                            const bg = getComputedStyle(doc.body).backgroundColor || "#0e1117";
-                            bar.style.setProperty("background-color", bg, "important");
-                        }
-                    });
-                }
-
-                pinLunaraChatBar();
-                const lunaraObserver = new MutationObserver(pinLunaraChatBar);
-                lunaraObserver.observe(doc.body, {childList: true, subtree: true});
-                // Ek güvence: bazı yeniden çizimler mutation observer'ı kaçırabiliyor
-                setInterval(pinLunaraChatBar, 800);
-            } catch (e) {
-                console.warn("Lunara chat bar pin failed:", e);
-            }
-        </script>
-        """,
-        height=0,
-    )
 
 # Modallar
 @st.dialog("✨ Lunara.ai - Giriş Yap")
@@ -583,9 +481,6 @@ with tab1:
         with st.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "🌙"):
             st.write(msg["content"])
 
-    if st.session_state.messages:
-        scroll_to_latest_message()
-
 with tab2:
     st.subheader("🪐 Doğum Haritası Potansiyel Analizi")
 
@@ -689,7 +584,7 @@ with tab4:
 # Alt Sohbet Çubuğu
 with st.container():
     with st.form(key="global_chat_bar_form", clear_on_submit=True):
-        b1, b2, b3 = st.columns([1.5, 7.5, 1.0])
+        b1, b2, b3 = st.columns([2.5, 6.5, 1.0])
         with b1:
             selected_label = st.selectbox(
                 "Model",
@@ -699,8 +594,6 @@ with st.container():
             active_model_id = MODEL_OPTIONS[selected_label]
         with b2: user_text = st.text_input("Mesaj", label_visibility="collapsed", placeholder="Fal, tarot veya burçlar hakkında bir şey sor...")
         with b3: submitted = st.form_submit_button("➤")
-
-pin_chat_bar_to_bottom()
 
 if submitted and user_text:
     if process_chat_request(user_text, active_model_id):
