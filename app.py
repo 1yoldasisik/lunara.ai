@@ -55,7 +55,7 @@ def init_db():
         )
     ''')
     
-    # Mevcut veritabanı şemasına is_admin sütunu dinamik ekleme kontrolü
+    # Mevcut veritabanı şemasına is_admin sütunu ekleme kontrolü
     cursor.execute("PRAGMA table_info(users)")
     columns = [column[1] for column in cursor.fetchall()]
     if 'is_admin' not in columns:
@@ -71,7 +71,7 @@ def init_db():
         )
     ''')
     
-    # Varsayılan Admin Hesabı Oluşturma (Yoksa)
+    # Varsayılan Admin Hesabı Oluşturma
     admin_email = "admin@lunara.ai"
     cursor.execute("SELECT email FROM users WHERE email = ?", (admin_email,))
     if not cursor.fetchone():
@@ -85,10 +85,9 @@ def init_db():
 
 init_db()
 
-# --- YARDIMCI FONKSİYONLAR (KONUM & GÜVENLİK) ---
+# --- YARDIMCI FONKSİYONLAR ---
 
 def get_auto_location():
-    """Kullanıcının tarayıcı/istemci IP adresinden şehir ve ülke bilgisini tespit eder."""
     try:
         client_ip = ""
         if hasattr(st, "context") and hasattr(st.context, "headers"):
@@ -115,7 +114,6 @@ def get_auto_location():
     return ""
 
 def check_password_strength(password: str):
-    """Şifre gücünü ve eksik kriterleri kontrol eder."""
     score = 0
     feedback = []
     
@@ -160,7 +158,6 @@ def db_get_user(email):
     return None
 
 def db_get_all_users():
-    """Admin paneli için tüm üyeleri çeker."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("SELECT email, name, location, credits, is_admin, email_notifications FROM users")
@@ -380,7 +377,7 @@ def deduct_credits(model_id):
         user_data = db_get_user(u_email)
         if user_data:
             if user_data.get("is_admin", False):
-                return True # Adminler kredi harcamaz
+                return True
             current_credits = user_data.get("credits", 0)
             if current_credits < required_cost:
                 st.error(f"⚠️ Yetersiz kredi! Bu işlem {required_cost} kredi gerektiriyor. Mevcut krediniz: {current_credits}.")
@@ -413,30 +410,39 @@ def admin_panel_dialog():
     col_u, col_act = st.columns([2, 2])
     with col_u:
         user_list = [u[0] for u in users]
-        selected_user_email = st.selectbox("İşlem Yapılacak Üyeyi Seçin:", user_list)
-        
+        selected_user_email = st.selectbox("İşlem Yapılacak Üyeyi Seçin:", user_list, key="admin_select_user")
+            
     with col_act:
         target_user = db_get_user(selected_user_email)
         if target_user:
-            new_credit_val = st.number_input("Yeni Kredi Miktarı:", value=int(target_user.get("credits", 0)), step=10)
-            if st.button("💾 Krediyi Güncelle", use_container_width=True):
-                db_update_user_credits(selected_user_email, new_credit_val)
-                st.success(f"✅ {selected_user_email} kullanıcısının kredisi {new_credit_val} olarak güncellendi!")
-                st.rerun()
+            # Form kullanarak button submit mekanizmasını sorunsuz çalıştırma
+            with st.form(key=f"credit_form_{selected_user_email}"):
+                new_credit_val = st.number_input(
+                    "Yeni Kredi Miktarı:", 
+                    value=int(target_user.get("credits", 0)), 
+                    step=10, 
+                    key=f"credit_input_{selected_user_email}"
+                )
+                submit_update = st.form_submit_button("💾 Krediyi Güncelle", use_container_width=True)
+                
+                if submit_update:
+                    db_update_user_credits(selected_user_email, new_credit_val)
+                    st.toast(f"✅ {selected_user_email} hesabının kredisi {new_credit_val} olarak güncellendi!")
+                    st.rerun()
 
     st.markdown("---")
     col_del, col_close = st.columns(2)
     with col_del:
-        if st.button("🗑️ Seçili Üyeyi Sil", type="primary", use_container_width=True):
+        if st.button("🗑️ Seçili Üyeyi Sil", type="primary", use_container_width=True, key="admin_delete_btn"):
             if selected_user_email == st.session_state.logged_in_email:
                 st.error("⚠️ Kendi admin hesabınızı silemezsiniz!")
             else:
                 db_delete_user(selected_user_email)
-                st.success(f"✅ {selected_user_email} başarıyla silindi!")
+                st.toast(f"✅ {selected_user_email} kullanıcısı silindi!")
                 st.rerun()
                 
     with col_close:
-        if st.button("Kapat", use_container_width=True):
+        if st.button("Kapat", use_container_width=True, key="admin_close_btn"):
             st.session_state.auth_mode = None
             st.rerun()
 
