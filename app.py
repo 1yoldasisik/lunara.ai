@@ -5,6 +5,7 @@ import re
 import sqlite3
 import bcrypt
 import streamlit as st
+import streamlit.components.v1 as components
 from groq import Groq
 
 # SQLite Veritabanı Yapılandırması
@@ -318,6 +319,22 @@ def refund_credits(model_id):
 def generation_failed(response_text):
     return isinstance(response_text, str) and response_text.startswith("Yıldızlardan şu an yanıt alınamadı")
 
+def scroll_to_latest_message():
+    """Sohbet listesinin en altına, yani en son alınan yoruma otomatik kaydırır."""
+    st.markdown('<div id="lunara-son-mesaj"></div>', unsafe_allow_html=True)
+    components.html(
+        """
+        <script>
+            const targetDoc = window.parent.document;
+            const anchor = targetDoc.getElementById("lunara-son-mesaj");
+            if (anchor) {
+                anchor.scrollIntoView({behavior: "smooth", block: "end"});
+            }
+        </script>
+        """,
+        height=0,
+    )
+
 # Modallar
 @st.dialog("✨ Lunara.ai - Giriş Yap")
 def login_dialog():
@@ -480,6 +497,9 @@ with tab1:
     for idx, msg in enumerate(st.session_state.messages):
         with st.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "🌙"):
             st.write(msg["content"])
+
+    if st.session_state.messages:
+        scroll_to_latest_message()
 
 with tab2:
     st.subheader("🪐 Doğum Haritası Potansiyel Analizi")
