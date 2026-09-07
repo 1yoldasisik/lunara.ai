@@ -496,24 +496,20 @@ def profile_dialog():
     
     new_name = st.text_input("Ad Soyad", value=user_data.get("name", ""))
     
-    # --- KONUM SEÇİMİ VE OTOMATİK BULMA ---
+    # --- KONUM SEÇİMİ VE GPS BUTONU ---
     st.write("**Konum Bilgisi:**")
-    
-    # Türkiye Şehirleri Açılır Listesi
-    selected_tr_city = st.selectbox(
-        "🇹🇷 Türkiye'den Şehir Seçin (İsteğe Bağlı):",
-        options=["-- Seçiniz veya Elle Giriniz --"] + [f"{city}, Türkiye" for city in TURKEY_CITIES]
-    )
-    
     current_loc = st.session_state.get("temp_location", user_data.get("location", ""))
-    if selected_tr_city != "-- Seçiniz veya Elle Giriniz --":
-        current_loc = selected_tr_city
-
-    col_loc1, col_loc2 = st.columns([3, 1])
-    with col_loc1:
-        new_loc = st.text_input("Konum (İl/Ülke veya Özel Konum)", value=current_loc, label_visibility="collapsed")
-    with col_loc2:
-        if st.button("📍 Otomatik Bul", use_container_width=True):
+    
+    # Şehir seçimi ve GPS butonunun yan yana yerleştirilmesi
+    col_city, col_gps = st.columns([5, 1])
+    with col_city:
+        selected_tr_city = st.selectbox(
+            "🇹🇷 Türkiye'den Şehir Seçin:",
+            options=["-- Seçiniz veya Elle Giriniz --"] + [f"{city}, Türkiye" for city in TURKEY_CITIES]
+        )
+    with col_gps:
+        st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+        if st.button("🎯", help="Otomatik Konum Bul (GPS)", use_container_width=True):
             auto_loc = get_auto_location()
             if auto_loc:
                 st.session_state["temp_location"] = auto_loc
@@ -521,6 +517,11 @@ def profile_dialog():
                 st.rerun()
             else:
                 st.error("Konumunuz tespit edilemedi.")
+
+    if selected_tr_city != "-- Seçiniz veya Elle Giriniz --":
+        current_loc = selected_tr_city
+
+    new_loc = st.text_input("Konum (İl/Ülke veya Özel Konum)", value=current_loc)
 
     # --- BİLDİRİM ABONELİĞİ ---
     email_notif = st.checkbox(
