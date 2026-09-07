@@ -3,6 +3,7 @@ import datetime
 import json
 import re
 import sqlite3
+import bcrypt
 import streamlit as st
 from groq import Groq
 
@@ -40,6 +41,27 @@ def init_db():
 
 init_db()
 
+# --- ŞİFRE GÜVENLİĞİ YARDIMCI FONKSİYONLARI ---
+
+def hash_password(plain_password):
+    """Düz metin şifreyi bcrypt ile hash'ler."""
+    return bcrypt.hashpw(plain_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+def verify_password(plain_password, stored_hash):
+    """Girilen şifreyi veritabanındaki bcrypt hash'i ile karşılaştırır.
+    Eski (hash'lenmemiş) kayıtlarla geriye dönük uyumluluk için,
+    stored_hash geçerli bir bcrypt hash'i değilse düz metin karşılaştırmasına düşer."""
+    if not stored_hash or not plain_password:
+        return False
+    try:
+        return bcrypt.checkpw(plain_password.encode("utf-8"), stored_hash.encode("utf-8"))
+    except (ValueError, TypeError):
+        # Muhtemelen eski, hash'lenmemiş bir kayıt
+        return stored_hash == plain_password
+
+def is_bcrypt_hash(value):
+    return bool(value) and (value.startswith("$2b$") or value.startswith("$2a$") or value.startswith("$2y$"))
+
 # --- VERİTABANI YARDIMCI FONKSİYONLARI ---
 
 def db_get_user(email):
@@ -68,7 +90,7 @@ def db_save_user(email, data):
     b_date_str = data["birth_date"].isoformat() if data.get("birth_date") else None
     b_time_str = data["birth_time"].strftime("%H:%M:%S") if data.get("birth_time") else None
     saved_readings_str = json.dumps(data.get("saved_readings", []), ensure_ascii=False)
-    
+
     cursor.execute('''
         INSERT OR REPLACE INTO users (email, name, password, location, birth_date, birth_time, bio, email_notifications, credits, saved_readings)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -151,11 +173,16 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # EN UYGUN 3 MODEL TANIMI VE ETİKETLERİ
+# NOT: mixtral-8x7b-32768, llama-3.1-8b-instant ve llama-3.3-70b-versatile
+# Groq tarafından deprecate/decommission edildi (Haziran-Ağustos 2026).
+# Güncel, aktif olan modellerle değiştirildi.
 MODEL_OPTIONS = {
-    "🧠 Gelişmiş (Llama 3.3 70B)": "llama-3.3-70b-versatile",
-    "⚡ Hızlı (Llama 3.1 8B)": "llama-3.1-8b-instant",
-    "🔮 Dengeli (Mixtral 8x7B)": "mixtral-8x7b-32768"
+    "🧠 Gelişmiş (GPT-OSS 120B)": "openai/gpt-oss-120b",
+    "⚡ Hızlı (GPT-OSS 20B)": "openai/gpt-oss-20b",
+    "🔮 Dengeli (Qwen3.6 27B)": "qwen/qwen3.6-27b"
 }
+
+DEFAULT_MODEL_ID = "openai/gpt-oss-120b"
 
 def get_groq_api_key():
     try:
@@ -198,17 +225,13 @@ def generate_completion(messages, preferred_model=None):
     candidate_models = []
     if preferred_model:
         candidate_models.append(preferred_model)
-    
+
     # 3 Ana model yedeği
     candidate_models.extend(list(MODEL_OPTIONS.values()))
-    
+
     # Hesaptaki diğer dinamik modeller
     active_models = get_groq_models_list()
     candidate_models.extend(active_models)
-
-    # Genel yedekler
-    fallback_models = ["gemma2-9b-it", "llama3-8b-8192"]
-    candidate_models.extend(fallback_models)
 
     # Yinelenen modelleri sırasını koruyarak temizle
     models_to_try = []
@@ -234,7 +257,7 @@ def generate_completion(messages, preferred_model=None):
             last_error = str(e)
             # Seçilen model çalışmazsa sessizce sonraki yedek modele geç
             continue
-            
+
     return f"Yıldızlardan şu an yanıt alınamadı. (Detay: {last_error})"
 
 # Oturum Yönetimi
@@ -256,10 +279,9 @@ if "system_prompt" not in st.session_state:
     )
 
 MODEL_CREDIT_COSTS = {
-    "llama-3.1-8b-instant": 1,
-    "llama-3.3-70b-versatile": 2,
-    "mixtral-8x7b-32768": 2,
-    "gemma2-9b-it": 1
+    "openai/gpt-oss-20b": 1,
+    "openai/gpt-oss-120b": 2,
+    "qwen/qwen3.6-27b": 2,
 }
 
 def deduct_credits(model_id):
@@ -281,6 +303,21 @@ def deduct_credits(model_id):
         st.session_state.guest_credits -= required_cost
     return True
 
+def refund_credits(model_id):
+    """generate_completion tüm modellerde başarısız olursa krediyi iade eder."""
+    required_cost = MODEL_CREDIT_COSTS.get(model_id, 1)
+    if st.session_state.logged_in_email:
+        u_email = st.session_state.logged_in_email
+        user_data = db_get_user(u_email)
+        if user_data:
+            user_data["credits"] = user_data.get("credits", 0) + required_cost
+            db_save_user(u_email, user_data)
+    else:
+        st.session_state.guest_credits += required_cost
+
+def generation_failed(response_text):
+    return isinstance(response_text, str) and response_text.startswith("Yıldızlardan şu an yanıt alınamadı")
+
 # Modallar
 @st.dialog("✨ Lunara.ai - Giriş Yap")
 def login_dialog():
@@ -289,7 +326,11 @@ def login_dialog():
     col1, col2 = st.columns(2)
     if col1.button("Giriş Yap", use_container_width=True):
         user_data = db_get_user(l_email)
-        if user_data and user_data["password"] == l_pass:
+        if user_data and verify_password(l_pass, user_data["password"]):
+            # Eski (hash'lenmemiş) kayıtları ilk başarılı girişte otomatik hash'le
+            if not is_bcrypt_hash(user_data["password"]):
+                user_data["password"] = hash_password(l_pass)
+                db_save_user(l_email, user_data)
             st.session_state.logged_in_email = l_email
             st.session_state.logged_in_user = user_data["name"]
             st.session_state.messages = db_get_chat_history(l_email)
@@ -312,7 +353,7 @@ def signup_dialog():
             if db_get_user(s_email):
                 st.warning("Bu e-posta zaten kullanımda.")
             else:
-                db_save_user(s_email, {"name": s_name, "password": s_pass, "credits": 20})
+                db_save_user(s_email, {"name": s_name, "password": hash_password(s_pass), "credits": 20})
                 st.session_state.logged_in_email = s_email
                 st.session_state.logged_in_user = s_name
                 st.session_state.messages = []
@@ -331,14 +372,21 @@ def profile_dialog():
         user_data["credits"] += 50
         db_save_user(email, user_data)
         st.rerun()
-    
+
     new_name = st.text_input("Ad Soyad", value=user_data.get("name", ""))
-    new_pass = st.text_input("Şifre", type="password", value=user_data.get("password", ""))
+    new_pass = st.text_input(
+        "Yeni Şifre (değiştirmek istemiyorsanız boş bırakın)",
+        type="password",
+        value=""
+    )
     new_loc = st.text_input("Konum", value=user_data.get("location", ""))
-    
+
     col1, col2 = st.columns(2)
     if col1.button("Kaydet", use_container_width=True):
-        user_data.update({"name": new_name, "password": new_pass, "location": new_loc})
+        update = {"name": new_name, "location": new_loc}
+        if new_pass:
+            update["password"] = hash_password(new_pass)
+        user_data.update(update)
         db_save_user(email, user_data)
         st.session_state.logged_in_user = new_name
         st.session_state.auth_mode = None
@@ -355,12 +403,12 @@ elif st.session_state.auth_mode == "profile": profile_dialog()
 with st.sidebar:
     st.title("🌙 Lunara.ai")
     st.markdown("---")
-    
+
     if st.session_state.logged_in_email:
         u_record = db_get_user(st.session_state.logged_in_email)
         st.markdown(f"✨ **{st.session_state.logged_in_user}**")
         st.caption(f"🪙 Kredi Bakiyesi: **{u_record.get('credits', 0)}**")
-        
+
         col1, col2 = st.columns(2)
         if col1.button("⚙️ Profil", use_container_width=True):
             st.session_state.auth_mode = "profile"
@@ -388,13 +436,14 @@ with st.sidebar:
         st.rerun()
 
 def process_chat_request(prompt_text, model_id=None):
-    if not deduct_credits(model_id or "llama-3.3-70b-versatile"):
+    model_id = model_id or DEFAULT_MODEL_ID
+    if not deduct_credits(model_id):
         return False
 
     st.session_state.messages.append({"role": "user", "content": prompt_text})
     if st.session_state.logged_in_email:
         db_save_chat_message(st.session_state.logged_in_email, "user", prompt_text)
-    
+
     with st.spinner("Yıldızlar okunuyor..."):
         prompt_messages = [{"role": "system", "content": st.session_state.get("system_prompt")}]
         history = st.session_state.messages[-10:] if len(st.session_state.messages) > 10 else st.session_state.messages
@@ -402,7 +451,11 @@ def process_chat_request(prompt_text, model_id=None):
         prompt_messages.append({"role": "user", "content": prompt_text})
 
         response = generate_completion(prompt_messages, preferred_model=model_id)
-        
+
+        if generation_failed(response):
+            refund_credits(model_id)
+            st.error("⚠️ Yanıt alınamadı, krediniz iade edildi. Lütfen tekrar deneyin.")
+
         st.session_state.messages.append({"role": "assistant", "content": response})
         if st.session_state.logged_in_email:
             db_save_chat_message(st.session_state.logged_in_email, "assistant", response)
@@ -430,7 +483,7 @@ with tab1:
 
 with tab2:
     st.subheader("🪐 Doğum Haritası Potansiyel Analizi")
-    
+
     default_ad = ""
     default_tarih = datetime.date(1995, 1, 1)
     default_saat = datetime.time(12, 0)
@@ -448,7 +501,7 @@ with tab2:
 
     with st.form("astro_form"):
         ad = st.text_input("Adınız ve Soyadınız", value=default_ad)
-        
+
         # --- DÜZELTİLEN TARİH SEÇİM ALANI ---
         st.write("**Doğum Tarihiniz:**")
         col_d, col_m, col_y = st.columns(3)
@@ -462,7 +515,7 @@ with tab2:
             default_year_idx = years_list.index(default_tarih.year) if default_tarih.year in years_list else 0
             sel_year = st.selectbox("Yıl", years_list, index=default_year_idx)
         # ------------------------------------
-            
+
         saat = st.time_input("Doğum Saatiniz", value=default_saat)
         sehir = st.text_input("Doğum Yeri (İl/Ülke)", value=default_sehir)
         submit = st.form_submit_button("🪐 Haritayı Analiz Et")
@@ -480,7 +533,7 @@ with tab2:
             if not ad or not sehir:
                 st.warning("⚠️ Lütfen adınızı ve doğum yerini eksiksiz doldurun.")
             else:
-                if deduct_credits("llama-3.3-70b-versatile"):
+                if deduct_credits(DEFAULT_MODEL_ID):
                     with st.spinner("Gezegen konumları ve doğum haritası hesaplanıyor..."):
                         prompt = (
                             f"Kullanıcı Bilgileri:\n"
@@ -494,11 +547,12 @@ with tab2:
                             "3. **Ay Burcu ve İç Dünya:**\n"
                             "4. **Ruhsal Yolculuk ve Önemli Tavsiyeler:**"
                         )
-                        res = generate_completion([{"role": "user", "content": prompt}], preferred_model="llama-3.3-70b-versatile")
-                        if res:
+                        res = generate_completion([{"role": "user", "content": prompt}], preferred_model=DEFAULT_MODEL_ID)
+                        if res and not generation_failed(res):
                             st.session_state.astro_result = res
                         else:
-                            st.session_state.astro_result = "Yıldızlardan şu an yanıt alınamadı, lütfen tekrar deneyin."
+                            refund_credits(DEFAULT_MODEL_ID)
+                            st.session_state.astro_result = "Yıldızlardan şu an yanıt alınamadı, krediniz iade edildi. Lütfen tekrar deneyin."
     if st.session_state.get("astro_result"):
         st.markdown("---")
         st.markdown(st.session_state.astro_result)
@@ -506,9 +560,11 @@ with tab2:
 with tab3:
     niyet = st.text_input("Niyetiniz:")
     if st.button("Kartları Çek"):
-        if deduct_credits("llama-3.3-70b-versatile"):
+        if deduct_credits(DEFAULT_MODEL_ID):
             with st.spinner("Karıştırılıyor..."):
-                res = generate_completion([{"role": "user", "content": f"{niyet} niyetine 3 tarot kartı çek ve yorumla."}], preferred_model="llama-3.3-70b-versatile")
+                res = generate_completion([{"role": "user", "content": f"{niyet} niyetine 3 tarot kartı çek ve yorumla."}], preferred_model=DEFAULT_MODEL_ID)
+                if generation_failed(res):
+                    refund_credits(DEFAULT_MODEL_ID)
                 st.session_state.tarot_result = res
                 st.rerun()
     if st.session_state.tarot_result: st.write(st.session_state.tarot_result)
@@ -516,9 +572,11 @@ with tab3:
 with tab4:
     metin = st.text_area("Sembolleri anlatın:")
     if st.button("Analiz Yap"):
-        if metin and deduct_credits("llama-3.3-70b-versatile"):
+        if metin and deduct_credits(DEFAULT_MODEL_ID):
             with st.spinner("Çözümleniyor..."):
-                res = generate_completion([{"role": "user", "content": f"{metin} sembollerini yorumla."}], preferred_model="llama-3.3-70b-versatile")
+                res = generate_completion([{"role": "user", "content": f"{metin} sembollerini yorumla."}], preferred_model=DEFAULT_MODEL_ID)
+                if generation_failed(res):
+                    refund_credits(DEFAULT_MODEL_ID)
                 st.session_state.kahve_result = res
                 st.rerun()
     if st.session_state.kahve_result: st.write(st.session_state.kahve_result)
